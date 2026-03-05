@@ -1,0 +1,4231 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&display=swap" rel="stylesheet">
+<title>Whack!</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #0a0a1a;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  canvas {
+    display: block;
+    margin: 0 auto;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<script>
+// ============================================================
+// CONFIG - 모든 밸런스 수치 집중 관리
+// ============================================================
+const CONFIG = {
+  // ===== 그리드 =====
+  gridRows: 3,
+  gridCols: 3,
+
+  // ===== 타겟 기본 =====
+  basicTargetDuration: 3.0,
+  trapTargetDuration: 1.0,
+  timingIndicatorDuration: 2.0,
+
+  // ===== 타겟 출현 비율 =====
+  basicSpawnRate: 0.6,
+  trapSpawnRate: 0.2,
+  timingSpawnRate: 0.2,
+
+  // ===== 타겟 첫 등장 가능 시간 (경과 초) =====
+  trapFirstAppearTime: 5,
+  timingFirstAppearTime: 10,
+
+  // ===== 난이도 구간 =====
+  difficultyPhases: [
+    { startTime: 0,  endTime: 15, spawnInterval: [1.0, 1.3], maxSimultaneous: 3 },
+    { startTime: 15, endTime: 25, spawnInterval: [0.7, 1.0], maxSimultaneous: 4 },
+    { startTime: 25, endTime: 30, spawnInterval: [0.5, 0.8], maxSimultaneous: 5 },
+  ],
+
+  // ===== 타이밍 판정 =====
+  timingE1Threshold: 0.5,
+  timingE2Threshold: 0.2,
+
+  // ===== 타이밍 시각 모드 =====
+  timingVisualMode: 'A',  // 'A' = Approach Circle, 'B' = Fill-Up 게이지, 'C' = Heartbeat Pulse
+
+  // 모드 A: Approach Circle (osu! 개선형)
+  timingA_lineWidthMin: 2,    // 링 시작 두께
+  timingA_lineWidthMax: 6,    // 링 E-3 근처 두께
+  timingA_e3GlowBlur: 12,     // E-3 구간 타겟 발광
+  timingA_e3ShakeIntensity: 2, // E-3 구간 떨림 ±px
+  timingA_e3ShakePeriod: 50,   // E-3 떨림 주기 ms
+
+  // 모드 B: 게이지 충전형
+  timingB_bgAlpha: 0.25,       // 원형 배경 투명도
+  timingB_gaugeWidth: 5,       // 게이지 호 두께
+  timingB_overflowDuration: 0.5, // 100% 도달 후 소멸까지 시간(초)
+
+  // 모드 C: 하트비트형 (Pulse)
+  timingC_pulseMin: 1.0,       // 박동 최소 스케일
+  timingC_pulseMax: 1.1,       // 박동 최대 스케일
+  timingC_periodStart: 0.8,    // 초기 박동 주기(초)
+  timingC_periodEnd: 0.1,      // E-3 구간 박동 주기(초)
+  timingC_ringAlpha: 0.4,      // 박동 최고점 링 이펙트 알파
+
+  // ===== 타이밍 타겟 떨림 =====
+  timingShakeIntensity: 2,
+  timingShakeStopAtE3: true,
+  timingE3TrembleStart: 0.2,    // 떨림 시작 indicatorScale
+  timingE3StillPoint: 0.05,     // 멈춤 시작 indicatorScale
+  timingE3GlowDuration: 0.3,    // 멈춤+발광 지속시간(초)
+
+  // ===== 점수 =====
+  scoreBasic: 150,
+  scoreTrap: -100,
+  scoreTimingE1: 80,
+  scoreTimingE2: 200,
+  scoreTimingE3: 500,
+  scoreFeverTap: 80,
+
+  // ===== Fever 게이지 =====
+  feverGaugeMax: 1000,
+  gaugeBasic: 100,
+  gaugeTrapPenalty: 200,          // 함정 터치 시 게이지 감소량
+  gaugeTrapFlashDuration: 0.2,  // 게이지 빨간 깜빡임 지속시간
+  gaugeTimingE1: 60,
+  gaugeTimingE2: 150,
+  gaugeTimingE3: 300,
+
+  // ===== Fever 모드 =====
+  feverDuration: 5.0,
+  feverWarningTime: 1.0,             // 종료 예고 시작 (잔여 N초)
+  feverWarningFlashInterval: 0.15,   // 깜빡임 간격(초)
+  feverSpawnInterval: [0.3, 0.5],
+  feverMaxSimultaneous: 6,
+  feverPauseTimer: true,
+  feverPinataPopDuration: 0.35,
+  feverPinataPopScale: 2.0,
+  feverPinataWobbleDuration: 0.3,
+  feverPinataWobbleAngle: 0.25,
+
+  // ===== 스테이지 =====
+  stageTimeLimit: 30,
+  star1Threshold: 1500,
+  star2Threshold: 2500,
+  star3Threshold: 4000,
+
+  // ===== 연출 시간 =====
+  targetSpawnAnimDuration: 0.25,
+  targetDespawnAnimDuration: 0.2,
+  targetHitAnimDuration: 0.20,
+  targetHitScalePeak: 1.5,
+  // Squash & Stretch 시퀀스 (히트 애니메이션)
+  hitSquashX: 1.3, hitSquashY: 0.7,   // Phase 1: 가로 찌그러짐 (0~0.03초)
+  hitStretchX: 0.8, hitStretchY: 1.4,  // Phase 2: 세로 늘어남 (0.03~0.08초)
+  hitExpandScale: 1.6,                  // Phase 3: 균일 팽창 (0.08~0.12초)
+  hitSquashDur: 0.03, hitStretchDur: 0.05, hitExpandDur: 0.04, hitVanishDur: 0.08,
+  // 히트스톱 (ms)
+  hitStopBasic: 30,
+  hitStopTrap: 50,
+  hitStopTimingE3: 60,
+  // 파티클 물리
+  particleDeceleration: 0.95,  // 프레임당 속도 감쇠 (1.0 = 감속 없음)
+  screenShakeDuration: 0.3,
+  screenShakeIntensity: 3,
+  screenShakeCycles: 2.5,
+  // 타입별 화면 흔들림
+  shakeBasic: 1,       // 기본 히트: ±1px 미세 (0.05초)
+  shakeBasicDur: 0.05,
+  shakeTrap: 5,        // 함정: ±5px 강한 (0.15초)
+  shakeTrapDur: 0.15,
+  shakeTimingE3: 2,    // 타이밍 E-3: ±2px + 회전 (0.08초)
+  shakeTimingE3Dur: 0.08,
+  shakeTimingE3Rot: 1, // ±1도 회전
+  shakeFever: 1,       // Fever 피냐타: ±1px (0.04초)
+  shakeFeverDur: 0.04,
+  feverFlashDuration: 0.5,
+
+  // ===== 타임업 =====
+  timeupDisplayDuration: 1.0,
+
+  // ===== 플로팅 텍스트 =====
+  floatingTextDuration: 0.7,
+  floatingTextRiseDistance: 50,
+};
+
+// ============================================================
+// THEME - UI 컬러 팔레트 (크림 + 민트 주조)
+// ============================================================
+const FONT = {
+  text: "'Gowun Dodum', sans-serif",   // 일반 텍스트
+  number: "'Black Han Sans', sans-serif", // 숫자 중심 요소
+};
+
+const THEME = {
+  // 배경
+  bgPrimary: '#FFF8F0',
+  bgSecondary: '#F0FAF7',
+  bgGrid: '#FFF5E6',
+
+  // 주조색
+  mint: '#7ECEC0',
+  mintLight: '#B5E8DF',
+  mintDark: '#5BA89C',
+
+  // 보조색
+  cream: '#FFE4C4',
+  peach: '#FFB5A7',
+  coral: '#FF8A80',
+  gold: '#FFD700',
+
+  // 텍스트
+  textPrimary: '#4A4A4A',
+  textSecondary: '#8A8A8A',
+  textLight: '#FFFFFF',
+
+  // UI 요소
+  buttonPrimary: '#7ECEC0',
+  buttonHover: '#5BA89C',
+  buttonDanger: '#FF8A80',
+  gaugeBase: '#E8E0D8',
+  gaugeFill: '#7ECEC0',
+  gaugeFever: '#FFD700',
+
+  // 그리드
+  gridLine: '#E8DFD5',
+  gridCellBg: '#FFFFFF',
+  gridCellBgAlt: '#FFF8F0',
+
+  // 그림자/효과
+  shadow: 'rgba(120, 100, 80, 0.1)',
+  glow: 'rgba(126, 206, 192, 0.4)',
+};
+
+// ============================================================
+// ASSETS - 비주얼 에셋 집중 관리
+// ============================================================
+const ASSETS = {
+  targets: {
+    basic: {
+      states: ["ready", "std", "pop"],
+      images: { ready: null, std: "images/target_basic_std.png", pop: "images/target_basic_dead.png" },
+      colors: { main: "#4CAF50", cheek: "#FF8A80", face: "#333333" },
+      shape: "circle",
+    },
+    trap: {
+      states: ["ready", "std", "pop"],
+      images: { ready: null, std: "images/target_trap.png", pop: null },
+      colors: { main: "#F44336", face: "#333333" },
+      shape: "spike_circle",
+    },
+    timing: {
+      states: ["ready", "std", "pop"],
+      images: { ready: null, std: "images/target_timing.png", pop: null },
+      colors: { main: "#FFD700", tear: "#64B5F6", face: "#333333" },
+      shape: "diamond",
+    },
+    fever: {
+      states: ["ready", "std", "pop"],
+      images: { ready: null, std: null, pop: null },
+      colors: { main: "#E040FB", face: "#FFFFFF" },
+      shape: "star",
+    },
+  },
+  pinata: {
+    image: "images/target_fever.png",
+    colors: {
+      body: "#FF6FB7",
+      stripe1: "#FFD700",
+      stripe2: "#64B5F6",
+      stripe3: "#81C784",
+      cheek: "#FF8A80",
+      face: "#333333",
+      hat: "#E040FB",
+    },
+  },
+  indicator: {
+    color: "rgba(255, 255, 255, 0.5)",
+    glowColor: "rgba(255, 255, 255, 0.3)",
+    glowBlur: 15,
+  },
+  particles: {
+    basicHit:    { colors: ["#7ECEC0", "#B5E8DF", "#FFE4C4"], count: 20, shape: "star",   sizeRange: [6, 10],  speedRange: [140, 260], gravity: 350, spin: true },
+    trapHit:     { colors: ["#FF8A80", "#FFB5A7", "#FFCEC7"], count: 12,  shape: "cross",  sizeRange: [7, 12],  speedRange: [120, 220], gravity: 300, spin: true },
+    timingE1:    { colors: ["#FFF176", "#FFEE58"],            count: 8,  shape: "circle", sizeRange: [4, 7],  speedRange: [90, 170],  gravity: 350, spin: false },
+    timingE2:    { colors: ["#FFD700", "#FFF176", "#FFFFFF"], count: 16,  shape: "star",   sizeRange: [6, 9],  speedRange: [120, 240], gravity: 350, spin: true },
+    timingE3:    { colors: ["#FFD700", "#FFC107", "#FFAB00", "#FFFFFF", "#FFF8E1", "#FF6F00"], count: 48, shape: "star", sizeRange: [7, 14], speedRange: [180, 350], gravity: 200, spin: true },
+    feverHit:    { colors: [THEME.gold, THEME.mint, THEME.cream, THEME.peach], count: 20, shape: "star",  sizeRange: [6, 10], speedRange: [140, 260], gravity: 350, spin: true },
+    pinataHit:   { colors: ["#B5E8DF", "#FFE4C4", "#FFB5A7", "#7ECEC0", "#FFF8F0", "#FFD700"], count: 10, shape: "mixed", sizeRange: [6, 10], speedRange: [130, 260], gravity: 320, spin: true },
+    pinataBurst: { colors: ["#B5E8DF", "#FFE4C4", "#FFB5A7", "#7ECEC0", "#FFF8F0", "#FFD700", "#F0FAF7", "#5BA89C"], count: 39, shape: "mixed", sizeRange: [7, 14], speedRange: [200, 420], gravity: 160, spin: true },
+  },
+  timeup: {
+    image: null, // null = 코드 렌더링. 나중에: "assets/timeup_character.png"
+    colors: { body: "#7EC8E3", cheek: "#FF8A80", face: "#333333", tear: "#64B5F6" },
+  },
+  ui: {
+    background: THEME.bgPrimary,
+    gridCell: THEME.gridCellBg,
+    gridCellBorder: THEME.gridLine,
+    textPrimary: THEME.textPrimary,
+    textScore: THEME.textPrimary,
+    feverGaugeFill: THEME.gaugeFill,
+    feverGaugeBackground: THEME.gaugeBase,
+    feverFlash: "rgba(126, 206, 192, 0.4)",
+  },
+  floatingText: {
+    basic:     { text: "+150",           color: THEME.mintDark },
+    trap:      { text: "-100",           color: THEME.coral },
+    timingE1:  { text: "Early +80",      color: "#D4C072" },
+    timingE2:  { text: "Good! +200",     color: THEME.gold },
+    timingE3:  { text: "Perfect! +500",  color: THEME.gold, scale: 1.3 },
+    feverTap:  { text: "+80",            color: THEME.gold, scale: 0.8, fadeSpeed: 1.5 },
+  },
+  // 사운드 에셋 경로 — null이면 OscillatorNode 폴백
+  // 파일 준비 시: 'sounds/hit_basic.mp3' 형태로 경로 지정
+  sounds: {
+    bgmNormal: 'sound/bgm_normal.mp3',
+    bgmFever: 'sound/bgm_fever.mp3',
+    bgmTitle: 'sound/bgm_title.mp3',
+    sfxHitBasic: null,
+    sfxHitTrap: null,
+    sfxHitTimingE1: null,
+    sfxHitTimingE2: null,
+    sfxHitTimingE3: null,
+    sfxFeverStart: null,
+    sfxFeverTap: null,
+    sfxFeverEnd: null,
+    sfxCountdown: null,
+    sfxCountdownGo: null,
+    sfxTimeUp: null,
+    sfxPinataHit: null,
+    sfxPinataExplode: null,
+  },
+};
+
+// ============================================================
+// SOUNDS - 효과음 설정 (다중 음 지원)
+// 각 사운드는 notes 배열로 구성. 각 note: {freq, end?, type, delay?, vol?, duration}
+// ============================================================
+const SOUNDS = {
+  // 기본 히트: 높은 톤 짧은 "뾱" (주파수 살짝 하강)
+  basicHit: { notes: [
+    { freq: 880, end: 660, type: "sine", duration: 0.08, vol: 0.18 },
+    { freq: 1320, type: "sine", duration: 0.05, vol: 0.06 }, // 배음
+  ]},
+  // 함정 히트: 낮은 버저 "삐잉" (톱니파 + 하강)
+  trapHit: { notes: [
+    { freq: 250, end: 120, type: "sawtooth", duration: 0.2, vol: 0.13 },
+    { freq: 180, end: 80,  type: "square",   duration: 0.15, vol: 0.06 },
+  ]},
+  // 타이밍 E-1: 낮고 짧은 음
+  timingE1: { notes: [
+    { freq: 523, type: "sine", duration: 0.1, vol: 0.15 },
+  ]},
+  // 타이밍 E-2: 중간 음 + 하모닉
+  timingE2: { notes: [
+    { freq: 784, type: "sine", duration: 0.12, vol: 0.16 },
+    { freq: 1046, type: "sine", duration: 0.08, vol: 0.06, delay: 0.03 },
+  ]},
+  // 타이밍 E-3: 높고 맑은 화음 "딩!"
+  timingE3: { notes: [
+    { freq: 1046, type: "sine",     duration: 0.18, vol: 0.17 },
+    { freq: 1318, type: "sine",     duration: 0.15, vol: 0.10, delay: 0.02 },
+    { freq: 1568, type: "triangle", duration: 0.12, vol: 0.06, delay: 0.04 },
+  ]},
+  // Fever 발동: 상승 팡파레 (도미솔도 아르페지오)
+  feverStart: { notes: [
+    { freq: 523,  type: "square",   duration: 0.12, vol: 0.25, delay: 0    },
+    { freq: 659,  type: "square",   duration: 0.12, vol: 0.25, delay: 0.08 },
+    { freq: 784,  type: "square",   duration: 0.12, vol: 0.28, delay: 0.16 },
+    { freq: 1046, type: "square",   duration: 0.25, vol: 0.30, delay: 0.24 },
+    { freq: 1046, type: "triangle", duration: 0.30, vol: 0.15, delay: 0.24 },
+  ]},
+  // Fever 중 터치: 가볍고 빠른 "팝"
+  feverTap: { notes: [
+    { freq: 740, end: 600, type: "sine", duration: 0.06, vol: 0.22 },
+  ]},
+  // Fever 종료: 하강 음
+  feverEnd: { notes: [
+    { freq: 784,  type: "sine", duration: 0.15, vol: 0.25, delay: 0    },
+    { freq: 523,  type: "sine", duration: 0.18, vol: 0.20, delay: 0.1  },
+    { freq: 392,  type: "sine", duration: 0.25, vol: 0.15, delay: 0.2  },
+  ]},
+  // 타임업: 낮은 종소리
+  timeup: { notes: [
+    { freq: 330, type: "sine",     duration: 0.5, vol: 0.12 },
+    { freq: 262, type: "triangle", duration: 0.6, vol: 0.08, delay: 0.15 },
+  ]},
+  // 별 등장 효과음: 도(C5), 미(E5), 솔(G5) 피치 상승
+  starReveal1: { notes: [
+    { freq: 523, type: "sine", duration: 0.25, vol: 0.20 },
+    { freq: 784, type: "triangle", duration: 0.20, vol: 0.08, delay: 0.03 },
+  ]},
+  starReveal2: { notes: [
+    { freq: 659, type: "sine", duration: 0.25, vol: 0.22 },
+    { freq: 988, type: "triangle", duration: 0.20, vol: 0.08, delay: 0.03 },
+  ]},
+  starReveal3: { notes: [
+    { freq: 784, type: "sine", duration: 0.25, vol: 0.24 },
+    { freq: 1175, type: "triangle", duration: 0.20, vol: 0.10, delay: 0.03 },
+  ]},
+  // 3성 대폭발: 화려한 화음
+  star3Burst: { notes: [
+    { freq: 1046, type: "sine",     duration: 0.3, vol: 0.25, delay: 0 },
+    { freq: 1318, type: "sine",     duration: 0.25, vol: 0.15, delay: 0.03 },
+    { freq: 1568, type: "triangle", duration: 0.35, vol: 0.12, delay: 0.06 },
+  ]},
+  // 카운트다운 비프: 짧은 "틱"
+  countdownTick: { notes: [
+    { freq: 660, type: "sine", duration: 0.1, vol: 0.18 },
+  ]},
+  // 카운트다운 Go: 높은 "띵!"
+  countdownGo: { notes: [
+    { freq: 880, type: "sine",     duration: 0.15, vol: 0.20 },
+    { freq: 1320, type: "triangle", duration: 0.12, vol: 0.08, delay: 0.02 },
+  ]},
+};
+
+// ============================================================
+// 이미지 프리로드 시스템
+// ============================================================
+const loadedImages = {}; // "경로" → Image 객체 (로드 완료 시)
+
+function preloadImages() {
+  // ASSETS.targets의 모든 이미지 경로 수집
+  for (const typeKey of Object.keys(ASSETS.targets)) {
+    const imgs = ASSETS.targets[typeKey].images;
+    for (const stateKey of Object.keys(imgs)) {
+      const path = imgs[stateKey];
+      if (path && !loadedImages[path]) {
+        const img = new Image();
+        img.src = path;
+        img.onload = () => { loadedImages[path] = img; };
+        img.onerror = () => { loadedImages[path] = null; };
+      }
+    }
+  }
+  // pinata
+  if (ASSETS.pinata.image) {
+    const img = new Image();
+    img.src = ASSETS.pinata.image;
+    img.onload = () => { loadedImages[ASSETS.pinata.image] = img; };
+    img.onerror = () => { loadedImages[ASSETS.pinata.image] = null; };
+  }
+}
+preloadImages();
+
+// 이미지가 로드되었는지 확인하고 반환 (없으면 null)
+function getImage(path) {
+  if (!path) return null;
+  return loadedImages[path] || null;
+}
+
+// ============================================================
+// Canvas 세팅 + 반응형 리사이즈
+// ============================================================
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+let canvasWidth, canvasHeight;
+let scaleRatio = 1;
+
+// 기준 해상도 (9:16 모바일 세로)
+const BASE_WIDTH = 390;
+const BASE_HEIGHT = 693;
+
+function resizeCanvas() {
+  const windowW = window.innerWidth;
+  const windowH = window.innerHeight;
+  const targetRatio = 9 / 16;
+  const windowRatio = windowW / windowH;
+
+  if (windowRatio < targetRatio) {
+    canvasWidth = windowW;
+    canvasHeight = windowW / targetRatio;
+  } else {
+    canvasHeight = windowH;
+    canvasWidth = windowH * targetRatio;
+  }
+
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  canvas.style.width = canvasWidth + "px";
+  canvas.style.height = canvasHeight + "px";
+
+  scaleRatio = canvasWidth / BASE_WIDTH;
+
+  computeGridLayout();
+}
+
+window.addEventListener("resize", resizeCanvas);
+
+// ============================================================
+// 그리드 레이아웃 계산
+// ============================================================
+let gridLayout = {
+  offsetX: 0,
+  offsetY: 0,
+  cellSize: 0,
+  gap: 0,
+  totalWidth: 0,
+  totalHeight: 0,
+  cells: [], // [{row, col, x, y, centerX, centerY}]
+};
+
+function computeGridLayout() {
+  const rows = CONFIG.gridRows;
+  const cols = CONFIG.gridCols;
+  const padding = 20 * scaleRatio;
+  const gap = 8 * scaleRatio;
+
+  const availableWidth = canvasWidth - padding * 2;
+  const cellSize = (availableWidth - gap * (cols - 1)) / cols;
+  const totalWidth = cellSize * cols + gap * (cols - 1);
+  const totalHeight = cellSize * rows + gap * (rows - 1);
+
+  // 그리드를 화면 중앙~약간 위에 배치 (하단 20% 여백)
+  const topArea = canvasHeight * 0.15; // 상단 UI 영역
+  const bottomMargin = canvasHeight * 0.20;
+  const availableGridHeight = canvasHeight - topArea - bottomMargin;
+  const offsetX = (canvasWidth - totalWidth) / 2;
+  const offsetY = topArea + (availableGridHeight - totalHeight) / 2;
+
+  gridLayout.offsetX = offsetX;
+  gridLayout.offsetY = offsetY;
+  gridLayout.cellSize = cellSize;
+  gridLayout.gap = gap;
+  gridLayout.totalWidth = totalWidth;
+  gridLayout.totalHeight = totalHeight;
+
+  gridLayout.cells = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = offsetX + c * (cellSize + gap);
+      const y = offsetY + r * (cellSize + gap);
+      gridLayout.cells.push({
+        row: r,
+        col: c,
+        x: x,
+        y: y,
+        centerX: x + cellSize / 2,
+        centerY: y + cellSize / 2,
+      });
+    }
+  }
+}
+
+// ============================================================
+// 게임 상태
+// ============================================================
+let gameState = "title"; // "title" | "tutorial" | "countdown" | "playing" | "timeup" | "result" | "ranking"
+let score = 0;
+let timeRemaining = CONFIG.stageTimeLimit;
+let feverGauge = 0;
+let gaugeFlashTimer = 0; // 게이지 빨간 깜빡임 타이머
+let isFever = false;
+let feverTimer = 0;
+
+// 타겟 관리
+let targets = []; // [{type, cellIndex, state, stateTimer, spawnTime, scale, ...}]
+let spawnTimer = 0;
+let nextSpawnInterval = 1.5;
+
+// 파티클
+let particles = [];
+
+// 플로팅 텍스트
+let floatingTexts = [];
+
+// 리플 이펙트
+let ripples = [];
+
+// 화면 흔들림
+let screenShake = { active: false, timer: 0, intensity: 0, duration: 0.3, rotationDeg: 0 };
+let hitStopUntil = 0; // 히트스톱: Date.now() 기준 정지 해제 시각
+let hitFlashes = [];  // 히트 플래시 이펙트 배열
+
+// 카운트다운
+let countdownNumber = 3; // 3, 2, 1
+let countdownTimer = 0;
+let countdownLastNumber = 0; // 마지막으로 비프 재생한 숫자
+
+// 피냐타 (Fever)
+let pinataX = 0;
+let pinataY = 0;
+let pinataRadius = 0;
+let pinataScale = 0;
+let pinataRotation = 0;
+let pinataWobbleTimer = 0;
+let pinataWobbleDir = 1;
+let feverPopPhase = false;
+let feverPopTimer = 0;
+let feverIntro = false;
+let feverIntroTimer = 0;
+const FEVER_INTRO_DURATION = 0.8; // 0.5초 등장 + 0.3초 페이드아웃
+
+// 배경 반짝임 (플레이 중 은은한 부유 파티클)
+const BG_SPARKLE_COUNT = 7;
+let bgSparkles = [];
+function initBgSparkles() {
+  bgSparkles = [];
+  for (let i = 0; i < BG_SPARKLE_COUNT; i++) {
+    bgSparkles.push({
+      x: Math.random(),           // 0~1 비율 (canvasWidth 곱해 사용)
+      y: Math.random(),           // 0~1 비율
+      speed: 0.015 + Math.random() * 0.02, // 초당 y 비율 이동
+      phase: Math.random() * Math.PI * 2,  // 깜빡임 위상
+      size: 1.2 + Math.random() * 1.0,     // 기본 크기
+    });
+  }
+}
+
+// ============================================================
+// 스코어 기록 시스템 (localStorage)
+// ============================================================
+const SCORE_STORAGE_KEY = "whack_highscores";
+const MAX_SCORES = 10;
+
+function loadScores() {
+  try {
+    const data = localStorage.getItem(SCORE_STORAGE_KEY);
+    if (data) return JSON.parse(data);
+  } catch (e) {}
+  return [];
+}
+
+function saveScores(scores) {
+  try {
+    localStorage.setItem(SCORE_STORAGE_KEY, JSON.stringify(scores));
+  } catch (e) {}
+}
+
+function addScore(newScore) {
+  const scores = loadScores();
+  scores.push({ score: newScore, date: Date.now() });
+  scores.sort((a, b) => b.score - a.score);
+  if (scores.length > MAX_SCORES) scores.length = MAX_SCORES;
+  saveScores(scores);
+  return scores;
+}
+
+// 타임업 타이머
+let timeupTimer = 0;
+
+// 결과 화면 상태
+let resultTimer = 0;
+let resultCountScore = 0;
+let resultStarsRevealed = 0;
+let resultPhase = "countup"; // "countup" | "stars" | "done"
+let resultStarAnimTimers = [0, 0, 0]; // 각 별의 개별 애니메이션 타이머
+let resultStarRotations = [0, 0, 0];  // 각 별의 회전각
+let resultStarParticles = [];          // 별 등장 시 금색 파티클
+let resultButtonTimer = 0;             // 버튼 등장 타이머 (0→슬라이드업)
+let resultScorePopTimer = 0;           // 카운트 완료 시 팽창 타이머
+let result3StarFlash = 0;              // 3성 화면 플래시
+
+// ============================================================
+// 유틸리티 함수
+// ============================================================
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function clamp(val, min, max) {
+  return Math.max(min, Math.min(max, val));
+}
+
+function randomRange(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function easeOutBack(t) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+function easeOutQuad(t) {
+  return 1 - (1 - t) * (1 - t);
+}
+
+function s(val) {
+  return val * scaleRatio;
+}
+
+// ============================================================
+// 사운드 시스템 — AudioManager (파일 재생 + OscillatorNode 폴백)
+// ============================================================
+let audioCtx = null;
+
+// SFX 키 → ASSETS.sounds 키 매핑
+const SFX_KEY_MAP = {
+  basicHit: "sfxHitBasic",
+  trapHit: "sfxHitTrap",
+  timingE1: "sfxHitTimingE1",
+  timingE2: "sfxHitTimingE2",
+  timingE3: "sfxHitTimingE3",
+  feverStart: "sfxFeverStart",
+  feverTap: "sfxFeverTap",
+  feverEnd: "sfxFeverEnd",
+  timeup: "sfxTimeUp",
+  countdownTick: "sfxCountdown",
+  countdownGo: "sfxCountdownGo",
+  pinataHit: "sfxPinataHit",
+  pinataExplode: "sfxPinataExplode",
+};
+
+// BGM 타입 → ASSETS.sounds 키 매핑
+const BGM_KEY_MAP = {
+  normal: "bgmNormal",
+  fever: "bgmFever",
+  title: "bgmTitle",
+};
+
+const MAX_SFX_POOL = 8; // 동시 재생 최대 수
+let sfxPool = []; // { audio, key, startTime }
+let preloadedAudio = {}; // key → Audio 원본 (프리로드용)
+
+// BGM 파일 재생 상태
+let bgmAudio = null;       // 현재 재생 중인 BGM Audio 엘리먼트
+let bgmAudioKey = null;    // 현재 BGM 키
+let bgmFadeInterval = null; // 크로스페이드 인터벌
+
+let sfxVolume = 1.0;
+let bgmVolume = 1.0;
+
+let audioInitialized = false;
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+  preloadAllAudio();
+  // 첫 터치 시 타이틀/결과/랭킹 화면이면 타이틀 BGM 시작
+  if (!audioInitialized) {
+    audioInitialized = true;
+    if (gameState === "title" || gameState === "result" || gameState === "ranking") {
+      setTimeout(() => startBGM("title"), 100);
+    }
+  }
+}
+
+// 프리로드: ASSETS.sounds에 경로가 있는 모든 파일을 미리 로드
+function preloadAllAudio() {
+  for (const [key, path] of Object.entries(ASSETS.sounds)) {
+    if (path && !preloadedAudio[key]) {
+      const audio = new Audio(path);
+      audio.preload = "auto";
+      audio.load();
+      audio.addEventListener("error", () => {
+        // 로딩 실패 시 null로 설정 → OscillatorNode 폴백
+        preloadedAudio[key] = null;
+        ASSETS.sounds[key] = null;
+      });
+      preloadedAudio[key] = audio;
+    }
+  }
+}
+
+// SFX 재생: 파일이 있으면 Audio, 없으면 OscillatorNode 폴백
+function playSound(soundKey) {
+  const assetKey = SFX_KEY_MAP[soundKey];
+  const filePath = assetKey ? ASSETS.sounds[assetKey] : null;
+
+  if (filePath && preloadedAudio[assetKey]) {
+    playSFXFile(assetKey);
+  } else {
+    playSFXOscillator(soundKey);
+  }
+}
+
+// 파일 기반 SFX 재생 (풀링)
+function playSFXFile(assetKey) {
+  // 풀에서 만료된 항목 정리
+  const now = Date.now();
+  sfxPool = sfxPool.filter(item => !item.audio.ended && (now - item.startTime) < 5000);
+
+  // 풀 한도 초과 시 가장 오래된 것 제거
+  if (sfxPool.length >= MAX_SFX_POOL) {
+    const oldest = sfxPool.shift();
+    oldest.audio.pause();
+    oldest.audio.currentTime = 0;
+  }
+
+  // Audio 복제하여 재생 (연타 시 겹침 허용)
+  const source = preloadedAudio[assetKey];
+  if (!source) return;
+  const clone = source.cloneNode();
+  clone.volume = sfxVolume;
+  clone.play().catch(() => {});
+  sfxPool.push({ audio: clone, key: assetKey, startTime: now });
+}
+
+// OscillatorNode 기반 SFX 재생 (기존 폴백)
+function playSFXOscillator(soundKey) {
+  if (!audioCtx) return;
+  const def = SOUNDS[soundKey];
+  if (!def || !def.notes) return;
+
+  const now = audioCtx.currentTime;
+  for (const note of def.notes) {
+    const startTime = now + (note.delay || 0);
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = note.type || "sine";
+    osc.frequency.setValueAtTime(note.freq, startTime);
+    if (note.end) {
+      osc.frequency.exponentialRampToValueAtTime(note.end, startTime + note.duration);
+    }
+    const vol = (note.vol || 0.15) * sfxVolume;
+    gain.gain.setValueAtTime(vol, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + note.duration);
+    osc.start(startTime);
+    osc.stop(startTime + note.duration + 0.01);
+  }
+}
+
+// ============================================================
+// BGM 시스템 (OscillatorNode 루프)
+// ============================================================
+const BGM = {
+  // 일반 BGM: 밝고 경쾌한 8비트풍 멜로디 (C장조)
+  normal: {
+    bpm: 160,
+    // [freq, duration_in_beats] — 0 = 쉼표
+    melody: [
+      [523, 0.5], [587, 0.5], [659, 0.5], [784, 0.5],
+      [880, 1],   [784, 0.5], [659, 0.5],
+      [784, 0.5], [659, 0.5], [523, 0.5], [587, 0.5],
+      [523, 1],   [0, 0.5],   [440, 0.5],
+      [523, 0.5], [587, 0.5], [659, 0.5], [784, 0.5],
+      [880, 0.5], [988, 0.5], [880, 1],
+      [784, 0.5], [659, 0.5], [587, 0.5], [523, 0.5],
+      [587, 1],   [0, 1],
+    ],
+    bass: [
+      [262, 2], [196, 2],
+      [220, 2], [262, 2],
+      [262, 2], [196, 2],
+      [220, 2], [196, 2],
+    ],
+    melodyType: "square",
+    bassType: "triangle",
+    melodyVol: 0.06,
+    bassVol: 0.04,
+  },
+  // Fever BGM: sawtooth 파형 + 빠른 BPM + 높은 볼륨 (일반과 확실히 다른 톤)
+  fever: {
+    bpm: 220,
+    melody: [
+      // 빠른 상승→하강 반복, 짧은 음표로 긴박감
+      [988, 0.25],  [1047, 0.25], [1175, 0.25], [1319, 0.25],
+      [1397, 0.5],  [1319, 0.25], [1175, 0.25],
+      [1319, 0.25], [1397, 0.25], [1319, 0.25], [1175, 0.25],
+      [1047, 0.5],  [1175, 0.25], [1319, 0.25],
+      [1397, 0.25], [1319, 0.25], [1175, 0.25], [1319, 0.25],
+      [1568, 0.5],  [1397, 0.5],
+      [1319, 0.25], [1175, 0.25], [1047, 0.25], [1175, 0.25],
+      [1319, 0.5],  [0, 0.25],    [988, 0.25],
+    ],
+    bass: [
+      // 펑키한 짧은 베이스 히트
+      [330, 0.5], [0, 0.5], [392, 0.5], [0, 0.5],
+      [349, 0.5], [0, 0.5], [330, 0.5], [392, 0.5],
+    ],
+    melodyType: "sawtooth",
+    bassType: "square",
+    melodyVol: 0.12,
+    bassVol: 0.07,
+  },
+};
+
+// OscillatorNode BGM 상태 (폴백용)
+let bgmState = {
+  playing: false,
+  currentType: null, // "normal" | "fever"
+  scheduledUntil: 0,
+  gainNode: null,
+  intervalId: null,
+};
+
+function startBGM(type) {
+  const assetKey = BGM_KEY_MAP[type];
+  const filePath = assetKey ? ASSETS.sounds[assetKey] : null;
+
+  if (filePath) {
+    startBGMFile(type, assetKey);
+  } else {
+    startBGMOscillator(type);
+  }
+}
+
+// --- 파일 기반 BGM ---
+function startBGMFile(type, assetKey) {
+  stopBGM();
+
+  const audio = preloadedAudio[assetKey];
+  if (!audio) { startBGMOscillator(type); return; }
+
+  bgmAudio = audio.cloneNode();
+  bgmAudio.loop = true;
+  bgmAudio.volume = bgmVolume;
+  bgmAudioKey = type;
+  bgmAudio.play().catch(() => {});
+
+  bgmState.playing = true;
+  bgmState.currentType = type;
+}
+
+// --- OscillatorNode BGM (폴백) ---
+function startBGMOscillator(type) {
+  if (!audioCtx) return;
+  stopBGMOscillator();
+
+  const masterGain = audioCtx.createGain();
+  masterGain.gain.setValueAtTime(bgmVolume, audioCtx.currentTime);
+  masterGain.connect(audioCtx.destination);
+
+  bgmState.playing = true;
+  bgmState.currentType = type;
+  bgmState.gainNode = masterGain;
+  bgmState.scheduledUntil = audioCtx.currentTime;
+
+  scheduleBGMChunk();
+  bgmState.intervalId = setInterval(scheduleBGMChunk, 500);
+}
+
+function scheduleBGMChunk() {
+  if (!bgmState.playing || !audioCtx) return;
+  const def = BGM[bgmState.currentType];
+  if (!def) return;
+
+  const beatDur = 60 / def.bpm;
+  const lookahead = 2.0;
+
+  while (bgmState.scheduledUntil < audioCtx.currentTime + lookahead) {
+    let t = bgmState.scheduledUntil;
+
+    let melodyTime = t;
+    for (const [freq, beats] of def.melody) {
+      const dur = beats * beatDur;
+      if (freq > 0) {
+        scheduleNote(freq, melodyTime, dur * 0.85, def.melodyType, def.melodyVol);
+      }
+      melodyTime += dur;
+    }
+
+    let bassTime = t;
+    for (const [freq, beats] of def.bass) {
+      const dur = beats * beatDur;
+      if (freq > 0) {
+        scheduleNote(freq, bassTime, dur * 0.9, def.bassType, def.bassVol);
+      }
+      bassTime += dur;
+    }
+
+    let melodyLen = 0;
+    for (const [, beats] of def.melody) melodyLen += beats * beatDur;
+    bgmState.scheduledUntil += melodyLen;
+  }
+}
+
+function scheduleNote(freq, startTime, duration, type, vol) {
+  if (!bgmState.gainNode) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(bgmState.gainNode);
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, startTime);
+  gain.gain.setValueAtTime(vol, startTime);
+  gain.gain.setValueAtTime(vol, startTime + duration * 0.7);
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+  osc.start(startTime);
+  osc.stop(startTime + duration + 0.01);
+}
+
+// OscillatorNode BGM만 정지 (내부용)
+function stopBGMOscillator() {
+  if (bgmState.intervalId) {
+    clearInterval(bgmState.intervalId);
+    bgmState.intervalId = null;
+  }
+  if (bgmState.gainNode) {
+    const oldGain = bgmState.gainNode;
+    try {
+      oldGain.gain.setValueAtTime(oldGain.gain.value, audioCtx.currentTime);
+      oldGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+    } catch(e) {}
+    setTimeout(() => {
+      try { oldGain.disconnect(); } catch(e) {}
+    }, 200);
+    bgmState.gainNode = null;
+  }
+  bgmState.scheduledUntil = 0;
+}
+
+// 파일 BGM만 정지 (내부용)
+function stopBGMFile() {
+  if (bgmFadeInterval) {
+    clearInterval(bgmFadeInterval);
+    bgmFadeInterval = null;
+  }
+  if (bgmAudio) {
+    bgmAudio.pause();
+    bgmAudio.currentTime = 0;
+    bgmAudio = null;
+    bgmAudioKey = null;
+  }
+}
+
+function stopBGM() {
+  stopBGMOscillator();
+  stopBGMFile();
+  bgmState.playing = false;
+  bgmState.currentType = null;
+}
+
+function switchBGM(type) {
+  if (bgmState.currentType === type && bgmState.playing) return;
+
+  const assetKey = BGM_KEY_MAP[type];
+  const filePath = assetKey ? ASSETS.sounds[assetKey] : null;
+  const oldAssetKey = bgmState.currentType ? BGM_KEY_MAP[bgmState.currentType] : null;
+  const oldFilePath = oldAssetKey ? ASSETS.sounds[oldAssetKey] : null;
+
+  // 파일→파일 전환: 크로스페이드
+  if (filePath && oldFilePath && bgmAudio) {
+    crossfadeBGM(type, assetKey, 0.3);
+  } else {
+    // 그 외: 즉시 전환
+    startBGM(type);
+  }
+}
+
+// BGM 크로스페이드 (파일 기반)
+function crossfadeBGM(newType, newAssetKey, duration) {
+  const oldAudio = bgmAudio;
+  const source = preloadedAudio[newAssetKey];
+  if (!source) { startBGM(newType); return; }
+
+  const newAudio = source.cloneNode();
+  newAudio.loop = true;
+  newAudio.volume = 0;
+  newAudio.play().catch(() => {});
+
+  bgmAudio = newAudio;
+  bgmAudioKey = newType;
+  bgmState.currentType = newType;
+
+  const steps = 15;
+  const stepTime = (duration * 1000) / steps;
+  let step = 0;
+
+  if (bgmFadeInterval) clearInterval(bgmFadeInterval);
+  bgmFadeInterval = setInterval(() => {
+    step++;
+    const t = step / steps;
+    if (oldAudio) oldAudio.volume = Math.max(0, bgmVolume * (1 - t));
+    newAudio.volume = bgmVolume * t;
+
+    if (step >= steps) {
+      clearInterval(bgmFadeInterval);
+      bgmFadeInterval = null;
+      if (oldAudio) {
+        oldAudio.pause();
+        oldAudio.currentTime = 0;
+      }
+      newAudio.volume = bgmVolume;
+    }
+  }, stepTime);
+}
+
+// 볼륨 제어
+function setBGMVolume(vol) {
+  bgmVolume = clamp(vol, 0, 1);
+  if (bgmAudio) bgmAudio.volume = bgmVolume;
+  if (bgmState.gainNode) {
+    try { bgmState.gainNode.gain.setValueAtTime(bgmVolume, audioCtx.currentTime); } catch(e) {}
+  }
+}
+function setSFXVolume(vol) { sfxVolume = clamp(vol, 0, 1); }
+
+// ============================================================
+// 타겟 시스템
+// ============================================================
+function getOccupiedCells() {
+  const occupied = new Set();
+  for (const t of targets) {
+    occupied.add(t.cellIndex);
+  }
+  return occupied;
+}
+
+function getAvailableCells() {
+  const occupied = getOccupiedCells();
+  const available = [];
+  for (let i = 0; i < gridLayout.cells.length; i++) {
+    if (!occupied.has(i)) {
+      available.push(i);
+    }
+  }
+  return available;
+}
+
+function getCurrentDifficultyPhase() {
+  const elapsed = CONFIG.stageTimeLimit - timeRemaining;
+  for (const phase of CONFIG.difficultyPhases) {
+    if (elapsed >= phase.startTime && elapsed < phase.endTime) {
+      return phase;
+    }
+  }
+  return CONFIG.difficultyPhases[CONFIG.difficultyPhases.length - 1];
+}
+
+function chooseTargetType() {
+  const elapsed = CONFIG.stageTimeLimit - timeRemaining;
+  const trapOk = elapsed >= CONFIG.trapFirstAppearTime;
+  const timingOk = elapsed >= CONFIG.timingFirstAppearTime;
+
+  // 아직 해금 안 된 타입의 비율을 기본 타겟에 합산
+  let bRate = CONFIG.basicSpawnRate;
+  let tRate = trapOk ? CONFIG.trapSpawnRate : 0;
+  let mRate = timingOk ? CONFIG.timingSpawnRate : 0;
+  const total = bRate + tRate + mRate;
+
+  const r = Math.random() * total;
+  if (r < bRate) return "basic";
+  if (r < bRate + tRate) return "trap";
+  return timingOk ? "timing" : "basic";
+}
+
+function spawnTarget() {
+  const available = getAvailableCells();
+  if (available.length === 0) return;
+
+  const phase = getCurrentDifficultyPhase();
+  const activeCount = targets.filter(t => t.state !== "despawning").length;
+  if (activeCount >= phase.maxSimultaneous) return;
+
+  const cellIndex = available[Math.floor(Math.random() * available.length)];
+  const type = isFever ? "fever" : chooseTargetType();
+
+  const target = {
+    type: type,
+    cellIndex: cellIndex,
+    state: "ready", // ready -> std -> pop/despawning
+    stateTimer: 0,
+    lifeTimer: 0,
+    scale: 0,
+    scaleX: 1,
+    scaleY: 1,
+    hitAlpha: 1,
+    hitRotation: 0,
+    maxDuration: type === "basic" ? CONFIG.basicTargetDuration
+               : type === "trap" ? CONFIG.trapTargetDuration
+               : type === "timing" ? CONFIG.timingIndicatorDuration
+               : CONFIG.basicTargetDuration,
+    // 타이밍 인디케이터
+    indicatorScale: 1.0,
+    _stillMode: false,    // E-3 멈춤 모드
+    _stillTimer: 0,       // 멈춤 잔여 시간
+    _stillFlashed: false, // 멈춤 진입 반짝 1회
+    // 바운스 (std 상태의 미세 움직임)
+    bounceOffset: 0,
+    bouncePhase: Math.random() * Math.PI * 2,
+  };
+
+  targets.push(target);
+}
+
+function removeTarget(index) {
+  targets.splice(index, 1);
+}
+
+// ============================================================
+// 파티클 시스템
+// ============================================================
+const MAX_PARTICLES = 200;
+function spawnParticles(x, y, type) {
+  const def = ASSETS.particles[type];
+  if (!def) return;
+  // 파티클 풀 제한: 오래된 것부터 제거
+  while (particles.length > MAX_PARTICLES - def.count) {
+    particles.shift();
+  }
+  const sizeMin = def.sizeRange ? def.sizeRange[0] : 3;
+  const sizeMax = def.sizeRange ? def.sizeRange[1] : 6;
+  const spdMin = def.speedRange ? def.speedRange[0] : 80;
+  const spdMax = def.speedRange ? def.speedRange[1] : 180;
+  for (let i = 0; i < def.count; i++) {
+    const angle = (Math.PI * 2 * i) / def.count + randomRange(-0.3, 0.3);
+    const speed = randomRange(spdMin, spdMax) * scaleRatio;
+    // 위쪽으로 더 많이 날아가도록 vy에 상향 바이어스
+    const vyBias = -randomRange(60, 140) * scaleRatio;
+    particles.push({
+      x: x,
+      y: y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed + vyBias,
+      life: 1.0,
+      decay: randomRange(2.0, 3.5),
+      size: randomRange(sizeMin, sizeMax) * scaleRatio,
+      color: def.colors[Math.floor(Math.random() * def.colors.length)],
+      shape: def.shape === "mixed" ? (Math.random() < 0.5 ? "star" : "circle") : (def.shape || "circle"),
+      gravity: def.gravity || 300,
+      rotation: randomRange(0, Math.PI * 2),
+      spinSpeed: def.spin ? randomRange(-8, 8) : 0,
+    });
+  }
+}
+
+// 히트 플래시: 타격 순간 흰색/황금색 원형 번쩍
+function spawnHitFlash(x, y, type) {
+  const baseRadius = gridLayout.cellSize * 0.35;
+  if (type === "timingE3") {
+    hitFlashes.push({ x, y, timer: 0, duration: 0.15, startAlpha: 0.7, alpha: 0.7, startRadius: baseRadius * 1.8 * scaleRatio, radius: baseRadius * 1.8 * scaleRatio, color: "#FFD700", startLineWidth: 5 * scaleRatio, lineWidth: 5 * scaleRatio });
+  } else {
+    hitFlashes.push({ x, y, timer: 0, duration: 0.10, startAlpha: 0.6, alpha: 0.6, startRadius: baseRadius * 1.5 * scaleRatio, radius: baseRadius * 1.5 * scaleRatio, color: THEME.mint, startLineWidth: 3.5 * scaleRatio, lineWidth: 3.5 * scaleRatio });
+  }
+}
+
+function spawnDustPuff(x, y, count) {
+  const n = count || 3;
+  for (let i = 0; i < n; i++) {
+    const dir = (i % 2 === 0) ? -1 : 1;
+    const hSpeed = randomRange(40, 100) * scaleRatio * dir;
+    const vSpeed = -randomRange(10, 40) * scaleRatio;
+    particles.push({
+      x: x + randomRange(-8, 8) * scaleRatio,
+      y: y,
+      vx: hSpeed,
+      vy: vSpeed,
+      life: 1.0,
+      decay: randomRange(4.5, 6.5),
+      size: randomRange(4, 8) * scaleRatio,
+      color: ["#BDBDBD", "#9E9E9E", "#D5D5D5", "#C0C0C0"][Math.floor(Math.random() * 4)],
+      shape: "circle",
+      gravity: 20,
+      rotation: 0,
+      spinSpeed: 0,
+    });
+  }
+}
+
+// ============================================================
+// 플로팅 텍스트
+// ============================================================
+function spawnFloatingText(x, y, key) {
+  const def = ASSETS.floatingText[key];
+  if (!def) return;
+  floatingTexts.push({
+    x: x,
+    y: y,
+    text: def.text,
+    color: def.color,
+    scale: def.scale || 1.0,
+    fadeSpeed: def.fadeSpeed || 1.0,
+    life: 1.0,
+    key: key,           // 타입 식별
+    spawnTime: Date.now() / 1000, // 무지개용 시간 기준
+  });
+}
+
+// ============================================================
+// 리플 이펙트
+// ============================================================
+function spawnRipple(x, y) {
+  // 바깥으로 퍼지는 링 2개 (시차)
+  ripples.push({
+    x: x, y: y,
+    radius: 0,
+    maxRadius: 45 * scaleRatio,
+    life: 1.0,
+    lineWidth: s(3),
+  });
+  ripples.push({
+    x: x, y: y,
+    radius: 0,
+    maxRadius: 28 * scaleRatio,
+    life: 1.0,
+    delay: 0.06,
+    lineWidth: s(2),
+  });
+}
+
+// ============================================================
+// 터치/클릭 입력 처리
+// ============================================================
+function getCanvasPos(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: clientX - rect.left,
+    y: clientY - rect.top,
+  };
+}
+
+function hitTest(x, y, bx, by, bw, bh) {
+  return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+}
+
+// 버튼 프레스 상태
+let pressedBtn = { id: null, timer: 0 };
+const PRESS_DURATION = 0.12;
+
+function setBtnPressed(id) {
+  pressedBtn.id = id;
+  pressedBtn.timer = PRESS_DURATION;
+}
+
+function isBtnPressed(id) {
+  return pressedBtn.id === id && pressedBtn.timer > 0;
+}
+
+// style: "primary" (분홍~보라 그라데이션) | "secondary" (회색~흰색)
+function drawGameButton(x, y, w, h, text, style, btnId) {
+  const pressed = isBtnPressed(btnId);
+  const r = s(14);
+  const shadowH = s(4);
+  const pressOffset = pressed ? shadowH * 0.8 : 0;
+  const currentShadow = pressed ? shadowH * 0.2 : shadowH;
+
+  // 그림자
+  if (currentShadow > 0.5) {
+    ctx.fillStyle = style === "primary"
+      ? "rgba(70, 140, 128, 0.4)"
+      : THEME.shadow;
+    roundRect(ctx, x, y + pressOffset + (h - currentShadow * 0.5), w, currentShadow + s(1), r);
+    ctx.fill();
+  }
+
+  // 버튼 본체
+  const btnY = y + pressOffset;
+  ctx.save();
+  roundRect(ctx, x, btnY, w, h, r);
+  ctx.clip();
+
+  if (style === "primary") {
+    const grad = ctx.createLinearGradient(x, btnY, x + w, btnY + h);
+    grad.addColorStop(0, THEME.mint);
+    grad.addColorStop(1, THEME.mintDark);
+    ctx.fillStyle = grad;
+  } else if (style === "danger") {
+    const grad = ctx.createLinearGradient(x, btnY, x + w, btnY + h);
+    grad.addColorStop(0, THEME.peach);
+    grad.addColorStop(1, THEME.coral);
+    ctx.fillStyle = grad;
+  } else {
+    ctx.fillStyle = "rgba(255, 248, 240, 0.9)";
+  }
+  ctx.fillRect(x, btnY, w, h);
+
+  // 상단 하이라이트 (볼록 느낌)
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(x, btnY, w, h * 0.45);
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+
+  // 테두리
+  if (style === "secondary") {
+    ctx.strokeStyle = THEME.mintLight;
+    ctx.lineWidth = s(1.5);
+    roundRect(ctx, x, btnY, w, h, r);
+    ctx.stroke();
+  }
+
+  // 텍스트
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = style === "secondary" ? THEME.mintDark : THEME.textLight;
+  ctx.font = `bold ${s(18)}px ${FONT.text}`;
+  ctx.fillText(text, x + w / 2, btnY + h / 2 + s(1));
+}
+
+function handleInput(x, y) {
+  initAudio();
+
+  if (gameState === "title") {
+    const btnW = s(200);
+    const btnH = s(52);
+    const btnGap = s(14);
+    const btnX = canvasWidth / 2 - btnW / 2;
+    const btnStartY = canvasHeight * 0.58;
+    // Start 버튼
+    if (hitTest(x, y, btnX, btnStartY, btnW, btnH)) {
+      setBtnPressed("title_start");
+      startTutorial();
+      return;
+    }
+    // Score 버튼
+    if (hitTest(x, y, btnX, btnStartY + btnH + btnGap, btnW, btnH)) {
+      setBtnPressed("title_score");
+      gameState = "ranking";
+      return;
+    }
+    return;
+  }
+
+  if (gameState === "tutorial") {
+    startCountdown();
+    return;
+  }
+
+  if (gameState === "ranking") {
+    // 돌아가기 버튼
+    const btnW = s(160);
+    const btnH = s(46);
+    const btnX = canvasWidth / 2 - btnW / 2;
+    const btnY = canvasHeight * 0.85;
+    if (hitTest(x, y, btnX, btnY, btnW, btnH)) {
+      setBtnPressed("ranking_back");
+      gameState = "title";
+    }
+    return;
+  }
+
+  if (gameState === "result") {
+    if (resultPhase !== "done") {
+      resultCountScore = score;
+      let totalStars = 0;
+      if (score >= CONFIG.star3Threshold) totalStars = 3;
+      else if (score >= CONFIG.star2Threshold) totalStars = 2;
+      else if (score >= CONFIG.star1Threshold) totalStars = 1;
+      resultStarsRevealed = totalStars;
+      resultStarAnimTimers = [1, 1, 1];
+      resultStarRotations = [Math.PI * 2, Math.PI * 2, Math.PI * 2];
+      resultPhase = "done";
+      resultTimer = 0;
+      resultButtonTimer = 0.01;
+    } else {
+      const cx = canvasWidth / 2;
+      const btnW = s(150);
+      const btnH = s(50);
+      const gap = s(12);
+      const totalW = btnW * 2 + gap;
+      const startX = cx - totalW / 2;
+      const btnY = canvasHeight * 0.78;
+
+      // 왼쪽: Retry
+      if (hitTest(x, y, startX, btnY, btnW, btnH)) {
+        setBtnPressed("result_retry");
+        startCountdown();
+        return;
+      }
+      // 오른쪽: Title
+      if (hitTest(x, y, startX + btnW + gap, btnY, btnW, btnH)) {
+        setBtnPressed("result_title");
+        resetToTitle();
+        return;
+      }
+    }
+    return;
+  }
+
+  if (gameState === "playing") {
+    handlePlayingInput(x, y);
+  }
+}
+
+function handlePlayingInput(x, y) {
+  // 전역 리플 이펙트
+  spawnRipple(x, y);
+
+  // Fever 중: 화면 어디든 터치하면 점수 획득
+  if (isFever) {
+    if (feverPopPhase) return; // 폭발 중 입력 무시
+
+    score += CONFIG.scoreFeverTap;
+
+    // 흔들림 트리거 (방향 교대)
+    pinataWobbleTimer = CONFIG.feverPinataWobbleDuration;
+    pinataWobbleDir = -pinataWobbleDir;
+
+    // 미세 화면 흔들림
+    screenShake.active = true;
+    screenShake.timer = CONFIG.shakeFeverDur;
+    screenShake.duration = CONFIG.shakeFeverDur;
+    screenShake.intensity = CONFIG.shakeFever * scaleRatio;
+    screenShake.rotationDeg = 0;
+
+    // 파티클은 피냐타 쪽으로, 플로팅 텍스트는 터치 위치에
+    const dx = x - pinataX;
+    const dy = y - pinataY;
+    spawnParticles(pinataX + dx * 0.2, pinataY + dy * 0.2, "pinataHit");
+    spawnFloatingText(x, y, "feverTap");
+    playSound("feverTap");
+    return;
+  }
+
+  // 일반 모드: 타겟 히트 판정
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i];
+    if (t.state === "pop" || t.state === "despawning") continue;
+
+    const cell = gridLayout.cells[t.cellIndex];
+    const halfSize = gridLayout.cellSize / 2;
+
+    // 셀 영역 내 터치 확인
+    if (x >= cell.x && x <= cell.x + gridLayout.cellSize &&
+        y >= cell.y && y <= cell.y + gridLayout.cellSize) {
+
+      if (t.type === "basic") {
+        score += CONFIG.scoreBasic;
+        feverGauge = clamp(feverGauge + CONFIG.gaugeBasic, 0, CONFIG.feverGaugeMax);
+        t.state = "pop";
+        t.stateTimer = 0;
+        t.scale = 1.0;
+        hitStopUntil = Date.now() + CONFIG.hitStopBasic;
+        screenShake.active = true;
+        screenShake.timer = CONFIG.shakeBasicDur;
+        screenShake.duration = CONFIG.shakeBasicDur;
+        screenShake.intensity = CONFIG.shakeBasic * scaleRatio;
+        screenShake.rotationDeg = 0;
+        spawnParticles(cell.centerX, cell.centerY, "basicHit");
+        spawnHitFlash(cell.centerX, cell.centerY, "basic");
+        spawnFloatingText(cell.centerX, cell.centerY, "basic");
+        playSound("basicHit");
+      } else if (t.type === "trap") {
+        score += CONFIG.scoreTrap;
+        if (score < 0) score = 0;
+        feverGauge = Math.max(0, feverGauge - CONFIG.gaugeTrapPenalty);
+        gaugeFlashTimer = CONFIG.gaugeTrapFlashDuration;
+        t.state = "pop";
+        t.stateTimer = 0;
+        t.scale = 1.0;
+        t.hitRotation = (Math.random() - 0.5) * 0.5; // ±14도 랜덤 회전 "덜컹"
+        hitStopUntil = Date.now() + CONFIG.hitStopTrap;
+        screenShake.active = true;
+        screenShake.timer = CONFIG.shakeTrapDur;
+        screenShake.duration = CONFIG.shakeTrapDur;
+        screenShake.intensity = CONFIG.shakeTrap * scaleRatio;
+        screenShake.rotationDeg = 0;
+        spawnParticles(cell.centerX, cell.centerY, "trapHit");
+        spawnHitFlash(cell.centerX, cell.centerY, "trap");
+        spawnFloatingText(cell.centerX, cell.centerY, "trap");
+        playSound("trapHit");
+      } else if (t.type === "timing") {
+        const indicatorScale = t.indicatorScale;
+        let scoreVal, gaugeVal, textKey, soundKey;
+
+        if (indicatorScale > CONFIG.timingE1Threshold) {
+          scoreVal = CONFIG.scoreTimingE1;
+          gaugeVal = CONFIG.gaugeTimingE1;
+          textKey = "timingE1";
+          soundKey = "timingE1";
+        } else if (indicatorScale > CONFIG.timingE2Threshold) {
+          scoreVal = CONFIG.scoreTimingE2;
+          gaugeVal = CONFIG.gaugeTimingE2;
+          textKey = "timingE2";
+          soundKey = "timingE2";
+        } else {
+          scoreVal = CONFIG.scoreTimingE3;
+          gaugeVal = CONFIG.gaugeTimingE3;
+          textKey = "timingE3";
+          soundKey = "timingE3";
+        }
+
+        score += scoreVal;
+        feverGauge = clamp(feverGauge + gaugeVal, 0, CONFIG.feverGaugeMax);
+        t.state = "pop";
+        t.stateTimer = 0;
+        t.scale = 1.0;
+        hitStopUntil = Date.now() + (textKey === "timingE3" ? CONFIG.hitStopTimingE3 : CONFIG.hitStopBasic);
+        if (textKey === "timingE3") {
+          screenShake.active = true;
+          screenShake.timer = CONFIG.shakeTimingE3Dur;
+          screenShake.duration = CONFIG.shakeTimingE3Dur;
+          screenShake.intensity = CONFIG.shakeTimingE3 * scaleRatio;
+          screenShake.rotationDeg = CONFIG.shakeTimingE3Rot;
+        } else {
+          screenShake.active = true;
+          screenShake.timer = CONFIG.shakeBasicDur;
+          screenShake.duration = CONFIG.shakeBasicDur;
+          screenShake.intensity = CONFIG.shakeBasic * scaleRatio;
+          screenShake.rotationDeg = 0;
+        }
+        spawnParticles(cell.centerX, cell.centerY, textKey); // E등급별 파티클
+        spawnHitFlash(cell.centerX, cell.centerY, textKey);
+        spawnFloatingText(cell.centerX, cell.centerY, textKey);
+        playSound(soundKey);
+      }
+
+      // Fever 게이지 체크
+      if (!isFever && !feverIntro && feverGauge >= CONFIG.feverGaugeMax) {
+        feverIntro = true;
+        feverIntroTimer = 0;
+        playSound("feverStart");
+        startFever(); // 피냐타 즉시 등장 (텍스트는 오버레이로 동시 표시)
+      }
+
+      return; // 한 번에 하나의 타겟만 히트
+    }
+  }
+}
+
+canvas.addEventListener("click", (e) => {
+  const pos = getCanvasPos(e.clientX, e.clientY);
+  handleInput(pos.x, pos.y);
+});
+
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  for (const touch of e.changedTouches) {
+    const pos = getCanvasPos(touch.clientX, touch.clientY);
+    handleInput(pos.x, pos.y);
+  }
+}, { passive: false });
+
+// ============================================================
+// 게임 상태 전환 함수
+// ============================================================
+function startTutorial() {
+  gameState = "tutorial";
+}
+
+function startCountdown() {
+  // 게임 변수 초기화 (BGM은 카운트다운 끝나고 시작)
+  score = 0;
+  timeRemaining = CONFIG.stageTimeLimit;
+  feverGauge = 0;
+  gaugeFlashTimer = 0;
+  isFever = false;
+  feverTimer = 0;
+  targets = [];
+  particles = [];
+  floatingTexts = [];
+  ripples = [];
+  spawnTimer = 0;
+  nextSpawnInterval = 1.0;
+  screenShake = { active: false, timer: 0, intensity: 0, duration: 0.3, rotationDeg: 0 };
+  hitStopUntil = 0;
+  hitFlashes = [];
+  pinataScale = 0;
+  pinataRotation = 0;
+  pinataWobbleTimer = 0;
+  feverPopPhase = false;
+  feverPopTimer = 0;
+  feverIntro = false;
+  feverIntroTimer = 0;
+  initBgSparkles();
+
+  gameState = "countdown";
+  countdownNumber = 3;
+  countdownTimer = 0;
+  countdownLastNumber = 0;
+}
+
+function startGame() {
+  gameState = "playing";
+  startBGM("normal");
+}
+
+function startFever() {
+  console.log("[FEVER] startFever() called");
+  isFever = true;
+  feverTimer = CONFIG.feverDuration;
+  feverGauge = CONFIG.feverGaugeMax;
+
+  // 기존 타겟 모두 제거
+  targets = [];
+
+  // 피냐타 위치 = 그리드 중앙
+  pinataX = gridLayout.offsetX + gridLayout.totalWidth / 2;
+  pinataY = gridLayout.offsetY + gridLayout.totalHeight / 2;
+  pinataRadius = gridLayout.cellSize * 0.9;
+  pinataScale = 0; // 0→1 등장 애니메이션
+  pinataRotation = 0;
+  pinataWobbleTimer = 0;
+  pinataWobbleDir = 1;
+  feverPopPhase = false;
+  feverPopTimer = 0;
+
+  console.log("[FEVER] calling switchBGM('fever')");
+  switchBGM("fever");
+}
+
+function startFeverPop() {
+  feverPopPhase = true;
+  feverPopTimer = 0;
+}
+
+function endFever() {
+  console.log("[FEVER] endFever() called, switching to normal BGM");
+  isFever = false;
+  feverTimer = 0;
+  feverGauge = 0;
+  feverPopPhase = false;
+  feverPopTimer = 0;
+  pinataScale = 0;
+  targets = [];
+  playSound("feverEnd");
+  switchBGM("normal");
+  spawnTimer = 0;
+  const phase = getCurrentDifficultyPhase();
+  nextSpawnInterval = randomRange(phase.spawnInterval[0], phase.spawnInterval[1]);
+}
+
+function triggerTimeup() {
+  gameState = "timeup";
+  timeupTimer = CONFIG.timeupDisplayDuration;
+  targets = [];
+  particles = [];
+  isFever = false;
+  feverIntro = false;
+  feverPopPhase = false;
+  pinataScale = 0;
+  stopBGM();
+  playSound("timeup");
+}
+
+function showResult() {
+  gameState = "result";
+  resultTimer = 0;
+  resultCountScore = 0;
+  resultStarsRevealed = 0;
+  resultPhase = "countup";
+  resultStarAnimTimers = [0, 0, 0];
+  resultStarRotations = [0, 0, 0];
+  resultStarParticles = [];
+  resultButtonTimer = 0;
+  resultScorePopTimer = 0;
+  result3StarFlash = 0;
+  addScore(score);
+  startBGM("title");
+}
+
+function resetToTitle() {
+  gameState = "title";
+  startBGM("title");
+}
+
+// ============================================================
+// 업데이트 루프
+// ============================================================
+let lastTime = 0;
+
+// 히트스톱 중 이펙트만 업데이트 (게임 로직 정지, 비주얼은 계속)
+function updateEffectsOnly(dt) {
+  // pop 애니메이션 진행 (타겟의 stateTimer)
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const t = targets[i];
+    if (t.state === "pop") {
+      t.stateTimer += dt;
+      const time = t.stateTimer;
+      const d1 = CONFIG.hitSquashDur;
+      const d2 = d1 + CONFIG.hitStretchDur;
+      const d3 = d2 + CONFIG.hitExpandDur;
+      const d4 = d3 + CONFIG.hitVanishDur;
+
+      if (time < d1) {
+        const p = easeOutBack(clamp(time / d1, 0, 1));
+        t.scaleX = lerp(1, CONFIG.hitSquashX, p);
+        t.scaleY = lerp(1, CONFIG.hitSquashY, p);
+        t.hitAlpha = 1;
+      } else if (time < d2) {
+        const p = easeOutBack(clamp((time - d1) / CONFIG.hitStretchDur, 0, 1));
+        t.scaleX = lerp(CONFIG.hitSquashX, CONFIG.hitStretchX, p);
+        t.scaleY = lerp(CONFIG.hitSquashY, CONFIG.hitStretchY, p);
+        t.hitAlpha = 1;
+      } else if (time < d3) {
+        const p = easeOutBack(clamp((time - d2) / CONFIG.hitExpandDur, 0, 1));
+        const expandS = lerp(1, CONFIG.hitExpandScale, p);
+        t.scaleX = lerp(CONFIG.hitStretchX, expandS, p);
+        t.scaleY = lerp(CONFIG.hitStretchY, expandS, p);
+        t.hitAlpha = 1;
+      } else {
+        const p = clamp((time - d3) / CONFIG.hitVanishDur, 0, 1);
+        const easedP = p * p;
+        const vanishScale = CONFIG.hitExpandScale * (1 - easedP);
+        t.scaleX = vanishScale;
+        t.scaleY = vanishScale;
+        t.hitAlpha = 1 - easedP;
+      }
+      if (time >= d4) {
+        removeTarget(i);
+      }
+    }
+  }
+  // 파티클
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += (p.gravity || 300) * scaleRatio * dt;
+    const decel = Math.pow(CONFIG.particleDeceleration, dt * 60);
+    p.vx *= decel;
+    p.vy *= decel;
+    p.rotation += (p.spinSpeed || 0) * dt;
+    p.life -= p.decay * dt;
+    if (p.life <= 0.01) particles.splice(i, 1);
+  }
+  // 히트 플래시 업데이트
+  for (let i = hitFlashes.length - 1; i >= 0; i--) {
+    const f = hitFlashes[i];
+    f.timer += dt;
+    if (f.timer >= f.duration) { hitFlashes.splice(i, 1); continue; }
+    const p = f.timer / f.duration;
+    f.alpha = f.startAlpha * (1 - p);
+    f.radius = f.startRadius * (1 + p);
+    f.lineWidth = f.startLineWidth * (1 - p * 0.7);
+  }
+  // 플로팅 텍스트
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.life -= (dt / CONFIG.floatingTextDuration) * ft.fadeSpeed;
+    const dir = ft.key === "trap" ? 1 : -1; // 함정은 아래로, 나머지는 위로
+    ft.y += dir * (CONFIG.floatingTextRiseDistance * scaleRatio) * dt / CONFIG.floatingTextDuration;
+    if (ft.life <= 0) floatingTexts.splice(i, 1);
+  }
+  // 리플
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i];
+    if (r.delay && r.delay > 0) { r.delay -= dt; continue; }
+    r.life -= dt * 3.5;
+    r.radius = r.maxRadius * easeOutQuad(1 - r.life);
+    if (r.life <= 0) ripples.splice(i, 1);
+  }
+  // 화면 흔들림
+  if (screenShake.active) {
+    screenShake.timer -= dt;
+    if (screenShake.timer <= 0) screenShake.active = false;
+  }
+  // 게이지 빨간 깜빡임
+  if (gaugeFlashTimer > 0) gaugeFlashTimer -= dt;
+}
+
+function update(dt) {
+  // 버튼 프레스 타이머 (모든 상태에서)
+  if (pressedBtn.timer > 0) pressedBtn.timer = Math.max(0, pressedBtn.timer - dt);
+
+  if (gameState !== "playing") return;
+
+  // 히트스톱 체크: 게임 로직은 정지, 이펙트(pop 애니메이션/파티클/텍스트/리플/흔들림)만 진행
+  const inHitStop = Date.now() < hitStopUntil;
+  if (inHitStop) {
+    updateEffectsOnly(dt);
+    return;
+  }
+
+  // 타이머 업데이트
+  if (!isFever || !CONFIG.feverPauseTimer) {
+    timeRemaining -= dt;
+    if (timeRemaining <= 0) {
+      timeRemaining = 0;
+      triggerTimeup();
+      return;
+    }
+  }
+
+  // Fever 인트로 텍스트 오버레이 타이머
+  if (feverIntro) {
+    feverIntroTimer += dt;
+    if (feverIntroTimer >= FEVER_INTRO_DURATION) {
+      feverIntro = false;
+      feverIntroTimer = 0;
+    }
+  }
+
+  // Fever 피냐타 업데이트
+  if (isFever) {
+    if (!feverPopPhase) {
+      feverTimer -= dt;
+
+      // 피냐타 등장 애니메이션 (0→1)
+      if (pinataScale < 1) {
+        pinataScale += dt / CONFIG.targetSpawnAnimDuration;
+        if (pinataScale > 1) pinataScale = 1;
+      }
+
+      // 흔들림 감쇠
+      if (pinataWobbleTimer > 0) {
+        pinataWobbleTimer -= dt;
+        if (pinataWobbleTimer <= 0) {
+          pinataWobbleTimer = 0;
+          pinataRotation = 0;
+        } else {
+          const wobbleP = pinataWobbleTimer / CONFIG.feverPinataWobbleDuration;
+          pinataRotation = Math.sin(wobbleP * Math.PI * 3)
+                          * CONFIG.feverPinataWobbleAngle * wobbleP
+                          * pinataWobbleDir;
+        }
+      }
+
+      // 종료 예고: 강화 흔들림 (마지막 1초)
+      if (feverTimer <= CONFIG.feverWarningTime && feverTimer > 0) {
+        const shakeAmp = 5 * scaleRatio; // ±5px
+        const shakeFreq = Date.now() * 0.03;
+        pinataRotation = Math.sin(shakeFreq) * 0.15; // 약 ±8.5도
+      }
+
+      // 타이머 종료 → 폭발 시작
+      if (feverTimer <= 0) {
+        feverTimer = 0;
+        startFeverPop();
+      }
+    } else {
+      // 폭발 애니메이션
+      feverPopTimer += dt;
+      const popDur = CONFIG.feverPinataPopDuration;
+      const popP = clamp(feverPopTimer / popDur, 0, 1);
+
+      if (popP < 0.6) {
+        // 팽창
+        const p = popP / 0.6;
+        pinataScale = 1 + (CONFIG.feverPinataPopScale - 1) * easeOutBack(p);
+      } else {
+        // 수축
+        const p = (popP - 0.6) / 0.4;
+        pinataScale = CONFIG.feverPinataPopScale * (1 - p * p);
+      }
+
+      // 60% 시점에서 대량 파티클 + screen shake
+      if (popP >= 0.55 && (feverPopTimer - dt) / popDur < 0.55) {
+        spawnParticles(pinataX, pinataY, "pinataBurst");
+        screenShake.active = true;
+        screenShake.timer = CONFIG.screenShakeDuration;
+        screenShake.duration = CONFIG.screenShakeDuration;
+        screenShake.intensity = CONFIG.shakeTrap * 1.5 * scaleRatio;
+        screenShake.rotationDeg = 0;
+      }
+
+      if (popP >= 1) {
+        endFever();
+      }
+    }
+  }
+
+  // 스폰 타이머 (Fever 중에는 스폰 안 함)
+  if (!isFever) {
+    spawnTimer += dt;
+    if (spawnTimer >= nextSpawnInterval) {
+      spawnTimer = 0;
+      spawnTarget();
+      const phase = getCurrentDifficultyPhase();
+      nextSpawnInterval = randomRange(phase.spawnInterval[0], phase.spawnInterval[1]);
+    }
+  }
+
+  // 타겟 업데이트
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const t = targets[i];
+    t.stateTimer += dt;
+    t.lifeTimer += dt;
+
+    if (t.state === "ready") {
+      // 등장 애니메이션
+      const progress = clamp(t.stateTimer / CONFIG.targetSpawnAnimDuration, 0, 1);
+      t.scale = easeOutBack(progress);
+      if (progress >= 1) {
+        t.state = "std";
+        t.stateTimer = 0;
+        t.scale = 1;
+        // 등장 완료 시 발밑 먼지 구름
+        const cell = gridLayout.cells[t.cellIndex];
+        spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 4);
+      }
+    } else if (t.state === "std") {
+      // 바운스 애니메이션
+      t.bouncePhase += dt * 3;
+      t.bounceOffset = Math.sin(t.bouncePhase) * 2 * scaleRatio;
+
+      // 타이밍 타겟: 인디케이터 축소 + 멈춤 구간
+      if (t.type === "timing") {
+        if (!t._stillMode) {
+          t.indicatorScale = clamp(1.0 - (t.lifeTimer / t.maxDuration), 0, 1);
+          // 멈춤 구간 진입
+          if (t.indicatorScale <= CONFIG.timingE3StillPoint) {
+            t._stillMode = true;
+            t._stillTimer = CONFIG.timingE3GlowDuration;
+            t.indicatorScale = CONFIG.timingE3StillPoint;
+          }
+        } else {
+          // 멈춤+발광 중: 타이머 카운트다운
+          t._stillTimer -= dt;
+          if (t._stillTimer <= 0) {
+            // 미스: 패널티 없이 사라짐
+            t.state = "despawning";
+            t.stateTimer = 0;
+            const cell = gridLayout.cells[t.cellIndex];
+            spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
+          }
+        }
+        // 기존 0 도달 체크 (멈춤 모드가 아닌 경우)
+        if (!t._stillMode && t.indicatorScale <= 0) {
+          t.state = "despawning";
+          t.stateTimer = 0;
+          const cell = gridLayout.cells[t.cellIndex];
+          spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
+        }
+      }
+
+      // 수명 초과 체크 (타이밍 타겟 제외 - 인디케이터로 관리)
+      if (t.type !== "timing" && t.lifeTimer >= t.maxDuration) {
+        t.state = "despawning";
+        t.stateTimer = 0;
+        const cell = gridLayout.cells[t.cellIndex];
+        spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
+      }
+    } else if (t.state === "pop") {
+      // Squash & Stretch 히트 애니메이션
+      const time = t.stateTimer;
+      const d1 = CONFIG.hitSquashDur;                      // 0.03
+      const d2 = d1 + CONFIG.hitStretchDur;                // 0.08
+      const d3 = d2 + CONFIG.hitExpandDur;                 // 0.12
+      const d4 = d3 + CONFIG.hitVanishDur;                 // 0.20
+
+      if (time < d1) {
+        // Phase 1: Squash (가로 찌그러짐)
+        const p = easeOutBack(clamp(time / d1, 0, 1));
+        t.scaleX = lerp(1, CONFIG.hitSquashX, p);
+        t.scaleY = lerp(1, CONFIG.hitSquashY, p);
+        t.scale = 1;
+        t.hitAlpha = 1;
+      } else if (time < d2) {
+        // Phase 2: Stretch (세로 늘어남)
+        const p = easeOutBack(clamp((time - d1) / CONFIG.hitStretchDur, 0, 1));
+        t.scaleX = lerp(CONFIG.hitSquashX, CONFIG.hitStretchX, p);
+        t.scaleY = lerp(CONFIG.hitSquashY, CONFIG.hitStretchY, p);
+        t.scale = 1;
+        t.hitAlpha = 1;
+      } else if (time < d3) {
+        // Phase 3: Expand (균일 팽창)
+        const p = easeOutBack(clamp((time - d2) / CONFIG.hitExpandDur, 0, 1));
+        const expandS = lerp(1, CONFIG.hitExpandScale, p);
+        t.scaleX = lerp(CONFIG.hitStretchX, expandS, p);
+        t.scaleY = lerp(CONFIG.hitStretchY, expandS, p);
+        t.scale = 1;
+        t.hitAlpha = 1;
+      } else {
+        // Phase 4: Vanish (축소 + 페이드아웃)
+        const p = clamp((time - d3) / CONFIG.hitVanishDur, 0, 1);
+        const easedP = p * p;
+        const vanishScale = CONFIG.hitExpandScale * (1 - easedP);
+        t.scaleX = vanishScale;
+        t.scaleY = vanishScale;
+        t.scale = 1;
+        t.hitAlpha = 1 - easedP;
+      }
+
+      if (time >= d4) {
+        removeTarget(i);
+        continue;
+      }
+    } else if (t.state === "despawning") {
+      // 퇴장 애니메이션: scale 1 -> 0
+      const progress = clamp(t.stateTimer / CONFIG.targetDespawnAnimDuration, 0, 1);
+      t.scale = 1 - progress;
+      if (progress >= 1) {
+        removeTarget(i);
+        continue;
+      }
+    }
+  }
+
+  // 파티클 업데이트
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += (p.gravity || 300) * scaleRatio * dt; // 개별 중력
+    const decel2 = Math.pow(CONFIG.particleDeceleration, dt * 60);
+    p.vx *= decel2;
+    p.vy *= decel2;
+    p.rotation += (p.spinSpeed || 0) * dt; // 회전
+    p.life -= p.decay * dt;
+    if (p.life <= 0.01) {
+      particles.splice(i, 1);
+    }
+  }
+
+  // 히트 플래시 업데이트
+  for (let i = hitFlashes.length - 1; i >= 0; i--) {
+    const f = hitFlashes[i];
+    f.timer += dt;
+    if (f.timer >= f.duration) { hitFlashes.splice(i, 1); continue; }
+    const p = f.timer / f.duration;
+    f.alpha = f.startAlpha * (1 - p);
+    f.radius = f.startRadius * (1 + p);
+    f.lineWidth = f.startLineWidth * (1 - p * 0.7);
+  }
+
+  // 플로팅 텍스트 업데이트
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.life -= (dt / CONFIG.floatingTextDuration) * ft.fadeSpeed;
+    const dir = ft.key === "trap" ? 1 : -1; // 함정은 아래로, 나머지는 위로
+    ft.y += dir * (CONFIG.floatingTextRiseDistance * scaleRatio) * dt / CONFIG.floatingTextDuration;
+    if (ft.life <= 0) {
+      floatingTexts.splice(i, 1);
+    }
+  }
+
+  // 리플 업데이트
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i];
+    // delay 처리
+    if (r.delay && r.delay > 0) { r.delay -= dt; continue; }
+    r.life -= dt * 3.5;
+    r.radius = r.maxRadius * easeOutQuad(1 - r.life);
+    if (r.life <= 0) {
+      ripples.splice(i, 1);
+    }
+  }
+
+  // 화면 흔들림 업데이트
+  if (screenShake.active) {
+    screenShake.timer -= dt;
+    if (screenShake.timer <= 0) {
+      screenShake.active = false;
+    }
+  }
+}
+
+function updateTimeup(dt) {
+  if (gameState !== "timeup") return;
+  timeupTimer -= dt;
+  if (timeupTimer <= 0) {
+    showResult();
+  }
+}
+
+function updateResult(dt) {
+  if (gameState !== "result") return;
+  resultTimer += dt;
+
+  let totalStars = 0;
+  if (score >= CONFIG.star3Threshold) totalStars = 3;
+  else if (score >= CONFIG.star2Threshold) totalStars = 2;
+  else if (score >= CONFIG.star1Threshold) totalStars = 1;
+
+  // 카운트업 완료 시 팽창 타이머
+  if (resultScorePopTimer > 0) {
+    resultScorePopTimer -= dt;
+    if (resultScorePopTimer < 0) resultScorePopTimer = 0;
+  }
+
+  // 3성 플래시
+  if (result3StarFlash > 0) {
+    result3StarFlash -= dt;
+    if (result3StarFlash < 0) result3StarFlash = 0;
+  }
+
+  // 별 애니메이션 타이머 업데이트
+  for (let i = 0; i < 3; i++) {
+    if (resultStarAnimTimers[i] > 0 && resultStarAnimTimers[i] < 1) {
+      resultStarAnimTimers[i] += dt / 0.5; // 0.5초간 애니메이션
+      if (resultStarAnimTimers[i] > 1) resultStarAnimTimers[i] = 1;
+      // 회전 보간
+      resultStarRotations[i] = Math.PI * 2 * clamp(resultStarAnimTimers[i], 0, 1);
+    }
+  }
+
+  // 별 파티클 업데이트
+  for (let i = resultStarParticles.length - 1; i >= 0; i--) {
+    const p = resultStarParticles[i];
+    p.life -= dt;
+    if (p.life <= 0) { resultStarParticles.splice(i, 1); continue; }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 200 * dt; // gravity
+    p.rotation += p.spin * dt;
+  }
+
+  // 버튼 등장 타이머
+  if (resultButtonTimer > 0) {
+    resultButtonTimer += dt;
+  }
+
+  if (resultPhase === "countup") {
+    // 1초간 0 → 최종 점수 카운트업
+    const countDuration = 1.0;
+    const progress = clamp(resultTimer / countDuration, 0, 1);
+    const eased = easeOutQuad(progress);
+    const prevScore = resultCountScore;
+    resultCountScore = Math.floor(score * eased);
+
+    // 별 기준점 통과 시 파티클
+    if (prevScore < CONFIG.star1Threshold && resultCountScore >= CONFIG.star1Threshold) {
+      spawnResultScoreParticles(4, THEME.mint);
+    } else if (prevScore < CONFIG.star2Threshold && resultCountScore >= CONFIG.star2Threshold) {
+      spawnResultScoreParticles(8, "#E8C840");
+    } else if (prevScore < CONFIG.star3Threshold && resultCountScore >= CONFIG.star3Threshold) {
+      spawnResultScoreParticles(12, THEME.gold);
+    }
+
+    if (progress >= 1) {
+      resultCountScore = score;
+      resultScorePopTimer = 0.3;
+      resultPhase = "stars";
+      resultTimer = 0;
+    }
+  } else if (resultPhase === "stars") {
+    // 0.4초 간격으로 별 하나씩 공개 (순차)
+    const revealInterval = 0.4;
+    const shouldReveal = Math.floor(resultTimer / revealInterval) + 1;
+    if (shouldReveal > resultStarsRevealed && resultStarsRevealed < totalStars) {
+      const newStar = Math.min(shouldReveal, totalStars);
+      for (let i = resultStarsRevealed; i < newStar; i++) {
+        resultStarAnimTimers[i] = 0.01; // 애니메이션 시작
+        // 별 등장 효과음 (도, 미, 솔)
+        playSound("starReveal" + (i + 1));
+        // 별 위치에 금색 파티클 폭발
+        const cx = canvasWidth / 2;
+        const starX = cx + (i - 1) * s(60);
+        const starY = canvasHeight * 0.45;
+        spawnStarBurstParticles(starX, starY, 10 + i * 4);
+      }
+      resultStarsRevealed = newStar;
+    }
+
+    // 3성 마지막 별 등장 후 대폭발
+    if (totalStars === 3 && resultStarsRevealed === 3 && result3StarFlash === 0 &&
+        resultTimer >= 3 * revealInterval + 0.1 && resultStarAnimTimers[2] >= 0.8) {
+      result3StarFlash = 0.15;
+      playSound("star3Burst");
+      // 금색 대폭발 파티클
+      const cx = canvasWidth / 2;
+      spawnStarBurstParticles(cx, canvasHeight * 0.45, 40);
+    }
+
+    if (resultTimer >= totalStars * revealInterval + 0.8) {
+      resultStarsRevealed = totalStars;
+      resultPhase = "done";
+      resultTimer = 0;
+      resultButtonTimer = 0.01; // 버튼 등장 시작
+    }
+  }
+}
+
+function spawnResultScoreParticles(count, color) {
+  const cx = canvasWidth / 2;
+  const y = canvasHeight * 0.31;
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count;
+    const speed = 60 + Math.random() * 80;
+    resultStarParticles.push({
+      x: cx + (Math.random() - 0.5) * s(40),
+      y: y + (Math.random() - 0.5) * s(20),
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 40,
+      life: 0.6 + Math.random() * 0.3,
+      maxLife: 0.8,
+      size: 2 + Math.random() * 2,
+      color: color,
+      rotation: 0,
+      spin: (Math.random() - 0.5) * 10,
+    });
+  }
+}
+
+function spawnStarBurstParticles(cx, cy, count) {
+  const colors = [THEME.gold, "#FFC107", "#FFF8E1", THEME.cream, "#FFE082"];
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
+    const speed = 80 + Math.random() * 150;
+    resultStarParticles.push({
+      x: cx + (Math.random() - 0.5) * s(10),
+      y: cy + (Math.random() - 0.5) * s(10),
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 60,
+      life: 0.5 + Math.random() * 0.5,
+      maxLife: 0.8,
+      size: 2 + Math.random() * 3,
+      color: colors[i % colors.length],
+      rotation: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 12,
+    });
+  }
+}
+
+function updateCountdown(dt) {
+  if (gameState !== "countdown") return;
+  countdownTimer += dt;
+
+  // 현재 표시할 숫자 계산: 0~1초 → 3, 1~2초 → 2, 2~3초 → 1
+  const currentNum = 3 - Math.floor(countdownTimer);
+
+  // 새 숫자 전환 시 비프음 재생
+  if (currentNum !== countdownLastNumber && currentNum >= 1 && currentNum <= 3) {
+    countdownLastNumber = currentNum;
+    playSound("countdownTick");
+  }
+
+  countdownNumber = Math.max(currentNum, 1);
+
+  // 3초 경과 → playing 전환
+  if (countdownTimer >= 3.0) {
+    playSound("countdownGo");
+    startGame();
+  }
+}
+
+// ============================================================
+// 렌더링
+// ============================================================
+function render() {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+  // 배경
+  ctx.fillStyle = ASSETS.ui.background;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  switch (gameState) {
+    case "title":     renderTitle(); break;
+    case "ranking":   renderRanking(); break;
+    case "tutorial":  renderTutorial(); break;
+    case "countdown": renderCountdown(); break;
+    case "playing":   renderPlaying(); break;
+    case "timeup":    renderTimeup(); break;
+    case "result":    renderResult(); break;
+  }
+}
+
+// ---- Title 파티클 초기화 ----
+const titleParticles = [];
+const TITLE_PARTICLE_COLORS = [THEME.mintLight, THEME.cream, THEME.peach, "#FFE082"];
+function initTitleParticles() {
+  if (titleParticles.length > 0) return;
+  for (let i = 0; i < 25; i++) {
+    titleParticles.push(spawnTitleParticle(true));
+  }
+}
+function spawnTitleParticle(randomY) {
+  return {
+    x: Math.random() * canvasWidth,
+    y: randomY ? Math.random() * canvasHeight : canvasHeight + Math.random() * s(20),
+    size: 3 + Math.random() * 5,
+    speed: 0.2 + Math.random() * 0.3,
+    alpha: 0.2 + Math.random() * 0.3,
+    color: TITLE_PARTICLE_COLORS[Math.floor(Math.random() * TITLE_PARTICLE_COLORS.length)],
+    wobbleAmp: Math.random() < 0.5 ? (1 + Math.random() * 2) : 0,
+    wobbleSpeed: 0.5 + Math.random() * 1.5,
+    wobblePhase: Math.random() * Math.PI * 2,
+  };
+}
+
+// ---- Title 화면 ----
+function renderTitle() {
+  const cx = canvasWidth / 2;
+  const now = Date.now() / 1000;
+  initTitleParticles();
+
+  // 1. 배경 그라데이션 (민트→크림, hue 미세 변화)
+  const hueShift = Math.sin(now * 0.628) * 5; // ±5도, 10초 주기
+  const topR = 181 + Math.round(hueShift * 0.3);
+  const topG = 232 + Math.round(hueShift * -0.2);
+  const topB = 223 + Math.round(hueShift * 0.4);
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+  bgGrad.addColorStop(0, `rgb(${topR}, ${topG}, ${topB})`);
+  bgGrad.addColorStop(1, THEME.bgPrimary);
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 2. 떠다니는 파스텔 파티클
+  for (let i = titleParticles.length - 1; i >= 0; i--) {
+    const p = titleParticles[i];
+    p.y -= p.speed;
+    if (p.wobbleAmp > 0) {
+      p.x += Math.sin(now * p.wobbleSpeed + p.wobblePhase) * p.wobbleAmp * 0.3;
+    }
+    if (p.y < -s(p.size)) {
+      titleParticles[i] = spawnTitleParticle(false);
+      continue;
+    }
+    ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, s(p.size / 2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // 3. 제목 텍스트 (바운스 + 떠다니기 + 글로우)
+  const titleScale = 1.0 + 0.03 * Math.sin(now * Math.PI); // 2초 주기
+  const titleFloat = Math.sin(now * Math.PI * 2 / 3) * s(3); // 3초 주기
+  const titleY = canvasHeight * 0.32 + titleFloat;
+  const baseTitleSize = s(60);
+  const titleSize = baseTitleSize * titleScale;
+
+  ctx.save();
+
+  // 글로우 효과
+  ctx.shadowColor = THEME.glow;
+  ctx.shadowBlur = s(15) + s(5) * Math.sin(now * 2);
+
+  // 제목 외곽선
+  ctx.strokeStyle = "rgba(91, 168, 156, 0.35)";
+  ctx.lineWidth = s(5);
+  ctx.font = `bold ${titleSize}px ${FONT.text}`;
+  ctx.strokeText("Whack!", cx, titleY);
+
+  // 제목 본문 (mintDark)
+  ctx.fillStyle = THEME.mintDark;
+  ctx.font = `bold ${titleSize}px ${FONT.text}`;
+  ctx.fillText("Whack!", cx, titleY);
+
+  ctx.restore(); // 글로우 초기화
+
+  // 제목 상단 하이라이트
+  ctx.globalAlpha = 0.2 + 0.1 * Math.sin(now * 3);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = `bold ${titleSize}px ${FONT.text}`;
+  ctx.fillText("Whack!", cx, titleY - s(1));
+  ctx.globalAlpha = 1;
+
+  // 부제
+  ctx.fillStyle = THEME.textSecondary;
+  ctx.font = `${s(16)}px ${FONT.text}`;
+  ctx.fillText("두더지 잡기 미니게임", cx, titleY + s(42) * titleScale);
+
+  // 4. 버튼 (맥박 Scale 1.0 ↔ 1.02, 1.5초 주기)
+  const btnPulse = 1.0 + 0.02 * Math.sin(now * Math.PI * 2 / 1.5);
+  const btnW = s(200);
+  const btnH = s(52);
+  const btnGap = s(14);
+  const btnStartY = canvasHeight * 0.58;
+
+  // Start 버튼
+  ctx.save();
+  const btn1CX = cx;
+  const btn1CY = btnStartY + btnH / 2;
+  ctx.translate(btn1CX, btn1CY);
+  ctx.scale(btnPulse, btnPulse);
+  ctx.translate(-btn1CX, -btn1CY);
+  drawGameButton(cx - btnW / 2, btnStartY, btnW, btnH, "Start", "primary", "title_start");
+  ctx.restore();
+
+  // Score 버튼
+  ctx.save();
+  const btn2Y = btnStartY + btnH + btnGap;
+  const btn2CY = btn2Y + btnH / 2;
+  ctx.translate(btn1CX, btn2CY);
+  ctx.scale(btnPulse, btnPulse);
+  ctx.translate(-btn1CX, -btn2CY);
+  drawGameButton(cx - btnW / 2, btn2Y, btnW, btnH, "Score", "secondary", "title_score");
+  ctx.restore();
+}
+
+// ---- Tutorial 화면 ----
+function renderTutorial() {
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  ctx.fillStyle = THEME.mintDark;
+  ctx.font = `bold ${s(28)}px ${FONT.text}`;
+  ctx.fillText("How to Play", canvasWidth / 2, canvasHeight * 0.1);
+
+  const startY = canvasHeight * 0.2;
+  const spacing = canvasHeight * 0.2;
+  const iconSize = s(40);
+
+  // 기본 타겟
+  drawBasicTargetIcon(canvasWidth * 0.2, startY, iconSize);
+  ctx.fillStyle = THEME.textPrimary;
+  ctx.font = `${s(16)}px ${FONT.text}`;
+  ctx.textAlign = "left";
+  ctx.fillText("터치하여 점수 획득!", canvasWidth * 0.35, startY);
+  ctx.fillStyle = THEME.mint;
+  ctx.font = `${s(13)}px ${FONT.text}`;
+  ctx.fillText(`+${CONFIG.scoreBasic}점`, canvasWidth * 0.35, startY + s(22));
+
+  // 함정 타겟
+  drawTrapTargetIcon(canvasWidth * 0.2, startY + spacing, iconSize);
+  ctx.fillStyle = THEME.textPrimary;
+  ctx.font = `${s(16)}px ${FONT.text}`;
+  ctx.textAlign = "left";
+  ctx.fillText("터치 금지! 감점 주의", canvasWidth * 0.35, startY + spacing);
+  ctx.fillStyle = THEME.coral;
+  ctx.font = `${s(13)}px ${FONT.text}`;
+  ctx.fillText(`${CONFIG.scoreTrap}점`, canvasWidth * 0.35, startY + spacing + s(22));
+
+  // 타이밍 타겟
+  drawTimingTargetIcon(canvasWidth * 0.2, startY + spacing * 2, iconSize);
+  ctx.fillStyle = THEME.textPrimary;
+  ctx.font = `${s(16)}px ${FONT.text}`;
+  ctx.textAlign = "left";
+  ctx.fillText("링이 줄어들 때 터치!", canvasWidth * 0.35, startY + spacing * 2);
+  ctx.fillStyle = THEME.gold;
+  ctx.font = `${s(13)}px ${FONT.text}`;
+  ctx.fillText(`최대 +${CONFIG.scoreTimingE3}점`, canvasWidth * 0.35, startY + spacing * 2 + s(22));
+
+  // Tap to Start
+  ctx.textAlign = "center";
+  const alpha = 0.5 + 0.5 * Math.sin(Date.now() / 500);
+  ctx.fillStyle = `rgba(91, 168, 156, ${alpha})`;
+  ctx.font = `${s(20)}px ${FONT.text}`;
+  ctx.fillText("Tap to Play", canvasWidth / 2, canvasHeight * 0.85);
+}
+
+// ---- Countdown 화면 ----
+function renderCountdown() {
+  // 그리드 배경 미리 그리기 (카운트다운 중 배경으로)
+  renderGrid();
+
+  // 반투명 크림 오버레이
+  ctx.fillStyle = "rgba(255, 248, 240, 0.75)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // 현재 숫자의 초 내 진행도 (0→1)
+  const inSecond = countdownTimer % 1.0;
+
+  // EaseOutBack 스케일 팝 효과 (등장 시 1.4→1.0)
+  const scaleT = Math.min(inSecond / 0.3, 1.0); // 0.3초 동안 애니메이션
+  const popScale = 1.0 + (1.4 - 1.0) * (1 - easeOutBack(scaleT));
+
+  // 페이드: 0.7초 이후 페이드아웃
+  const alpha = inSecond < 0.7 ? 1.0 : 1.0 - (inSecond - 0.7) / 0.3;
+
+  ctx.save();
+  ctx.translate(canvasWidth / 2, canvasHeight * 0.45);
+  ctx.scale(popScale, popScale);
+  ctx.globalAlpha = clamp(alpha, 0, 1);
+
+  // 숫자 텍스트
+  const numText = String(countdownNumber);
+  ctx.fillStyle = THEME.mint;
+  ctx.font = `bold ${s(120)}px ${FONT.number}`;
+  ctx.strokeStyle = "rgba(91, 168, 156, 0.3)";
+  ctx.lineWidth = s(4);
+  ctx.strokeText(numText, 0, 0);
+  ctx.fillText(numText, 0, 0);
+
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// ---- Playing 화면 ----
+function renderPlaying() {
+  // 배경 반짝임 (가장 뒤 레이어)
+  const now = Date.now() / 1000;
+  for (const sp of bgSparkles) {
+    sp.y -= sp.speed / 60; // 프레임당 이동
+    if (sp.y < -0.02) { sp.y = 1.02; sp.x = Math.random(); }
+    const alpha = (0.15 + 0.12 * Math.sin(now * 2.5 + sp.phase)) * 0.7;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = sp.phase % 2 < 1 ? THEME.mintLight : THEME.cream;
+    ctx.beginPath();
+    ctx.arc(sp.x * canvasWidth, sp.y * canvasHeight, s(sp.size), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Fever 플래시 배경
+  if (isFever) {
+    const flashAlpha = 0.08 + 0.06 * Math.sin(Date.now() / 150);
+    ctx.fillStyle = `rgba(255, 215, 0, ${flashAlpha})`;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+
+  // HUD는 흔들림 없이 먼저 렌더링
+  renderHUD();
+
+  // 그리드 영역에만 흔들림 적용
+  if (screenShake.active) {
+    const dur = screenShake.duration || CONFIG.screenShakeDuration;
+    const progress = 1 - screenShake.timer / dur; // 0→1
+    const decay = 1 - progress; // 감쇠: 1→0
+    const wave = Math.sin(progress * Math.PI * 2 * CONFIG.screenShakeCycles);
+    const shakeX = wave * screenShake.intensity * decay;
+    ctx.save();
+    ctx.translate(shakeX, 0);
+    // 회전 흔들림 (타이밍 E-3)
+    if (screenShake.rotationDeg) {
+      const rotRad = (screenShake.rotationDeg * Math.PI / 180) * wave * decay;
+      ctx.translate(canvasWidth / 2, canvasHeight / 2);
+      ctx.rotate(rotRad);
+      ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
+    }
+  }
+
+  renderGrid();
+
+  if (isFever) {
+    renderPinata();
+  } else {
+    renderTargets();
+  }
+
+  renderHitFlashes();
+  renderParticles();
+  renderFloatingTexts();
+  renderRipples();
+
+  if (screenShake.active) {
+    ctx.restore();
+  }
+
+  // Fever 종료 예고 깜빡임 (마지막 1초)
+  if (isFever && feverTimer > 0 && feverTimer <= CONFIG.feverWarningTime && !feverPopPhase) {
+    const flash = Math.floor(feverTimer / CONFIG.feverWarningFlashInterval) % 2 === 0;
+    if (flash) {
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      ctx.restore();
+    }
+  }
+
+  // Fever 인트로 텍스트
+  if (feverIntro) {
+    const p = feverIntroTimer / FEVER_INTRO_DURATION;
+    // 0~0.625(0.5s): 등장+유지, 0.625~1.0(0.3s): 페이드아웃
+    const fadeOutStart = 0.5 / FEVER_INTRO_DURATION;
+    const alpha = p < fadeOutStart ? 1.0 : 1.0 - (p - fadeOutStart) / (1 - fadeOutStart);
+    // 스케일: 0.3→1.0 (EaseOutBack, 처음 0.3초)
+    const scaleUpEnd = 0.3 / FEVER_INTRO_DURATION;
+    const scaleP = clamp(p / scaleUpEnd, 0, 1);
+    const textScale = 0.3 + 0.7 * easeOutBack(scaleP);
+
+    ctx.save();
+    ctx.globalAlpha = clamp(alpha, 0, 1) * 0.9;
+    ctx.translate(canvasWidth / 2, canvasHeight * 0.45);
+    ctx.scale(textScale, textScale);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // 외곽선
+    ctx.strokeStyle = "rgba(180, 140, 0, 0.4)";
+    ctx.lineWidth = s(5);
+    ctx.font = `bold ${s(48)}px ${FONT.text}`;
+    ctx.strokeText("Fever Time!", 0, 0);
+
+    // 텍스트
+    ctx.fillStyle = THEME.gold;
+    ctx.fillText("Fever Time!", 0, 0);
+
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+function renderHUD() {
+  const hudY = s(10);
+  const hudPadH = s(10);
+  const hudPadV = s(6);
+
+  // ── 점수 (둥근 반투명 배경) ──
+  const scoreText = score.toString();
+  ctx.font = `bold ${s(26)}px ${FONT.number}`;
+  const scoreW = ctx.measureText(scoreText).width;
+  const scoreBgW = scoreW + hudPadH * 2;
+  const scoreBgH = s(26) + hudPadV * 2;
+  const scoreBgX = s(12);
+  const scoreBgY = hudY;
+
+  ctx.fillStyle = "rgba(255, 248, 240, 0.85)";
+  roundRect(ctx, scoreBgX, scoreBgY, scoreBgW, scoreBgH, s(10));
+  ctx.fill();
+  ctx.strokeStyle = THEME.gridLine;
+  ctx.lineWidth = s(1);
+  roundRect(ctx, scoreBgX, scoreBgY, scoreBgW, scoreBgH, s(10));
+  ctx.stroke();
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = THEME.textPrimary;
+  ctx.font = `bold ${s(26)}px ${FONT.number}`;
+  ctx.fillText(scoreText, scoreBgX + hudPadH, scoreBgY + scoreBgH / 2);
+
+  // ── 타이머 (원형 프로그레스 바) ──
+  const timerRadius = s(22);
+  const timerCX = canvasWidth - s(12) - timerRadius;
+  const timerCY = hudY + scoreBgH / 2;
+  const timerRatio = clamp(timeRemaining / CONFIG.stageTimeLimit, 0, 1);
+  const timerSeconds = Math.ceil(timeRemaining);
+  const isUrgent = timeRemaining <= 5;
+
+  // 배경 원
+  ctx.fillStyle = "rgba(255, 248, 240, 0.85)";
+  ctx.beginPath();
+  ctx.arc(timerCX, timerCY, timerRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = THEME.gridLine;
+  ctx.lineWidth = s(1);
+  ctx.beginPath();
+  ctx.arc(timerCX, timerCY, timerRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 프로그레스 아크
+  const arcStart = -Math.PI / 2;
+  const arcEnd = arcStart + Math.PI * 2 * timerRatio;
+  ctx.lineWidth = s(3.5);
+  ctx.lineCap = "round";
+  if (isUrgent) {
+    const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 150);
+    ctx.strokeStyle = `rgba(255, 138, 128, ${pulse})`;
+  } else {
+    ctx.strokeStyle = THEME.mint;
+  }
+  ctx.beginPath();
+  ctx.arc(timerCX, timerCY, timerRadius - s(4), arcStart, arcEnd);
+  ctx.stroke();
+
+  // 숫자
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = isUrgent ? THEME.coral : THEME.textPrimary;
+  ctx.font = `bold ${s(20)}px ${FONT.number}`;
+  ctx.fillText(timerSeconds.toString(), timerCX, timerCY + s(1));
+
+  // ── Fever 게이지 바 (그라데이션) ──
+  const barX = s(12);
+  const barY = scoreBgY + scoreBgH + s(6);
+  const barWidth = canvasWidth - s(24);
+  const barHeight = s(10);
+  const barRadius = s(5);
+
+  // 바 배경
+  ctx.fillStyle = THEME.gaugeBase;
+  roundRect(ctx, barX, barY, barWidth, barHeight, barRadius);
+  ctx.fill();
+
+  // 채워진 부분
+  const fillRatio = feverGauge / CONFIG.feverGaugeMax;
+  if (fillRatio > 0) {
+    const fillWidth = barWidth * fillRatio;
+    ctx.save();
+    roundRect(ctx, barX, barY, fillWidth, barHeight, barRadius);
+    ctx.clip();
+    if (isFever) {
+      ctx.fillStyle = THEME.gold;
+      ctx.fillRect(barX, barY, fillWidth, barHeight);
+    } else if (fillRatio >= 0.8) {
+      // 80% 이상: 민트→금색 그라데이션
+      const grad = ctx.createLinearGradient(barX, 0, barX + barWidth, 0);
+      grad.addColorStop(0, THEME.mint);
+      grad.addColorStop(0.7, THEME.mint);
+      grad.addColorStop(1, THEME.gold);
+      ctx.fillStyle = grad;
+      ctx.fillRect(barX, barY, fillWidth, barHeight);
+    } else {
+      ctx.fillStyle = THEME.gaugeFill;
+      ctx.fillRect(barX, barY, fillWidth, barHeight);
+    }
+    // 상단 하이라이트 (광택)
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(barX, barY, fillWidth, barHeight * 0.35);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // 함정 터치: 게이지 빨간 깜빡임
+  if (gaugeFlashTimer > 0) {
+    const flashAlpha = 0.5 * (gaugeFlashTimer / CONFIG.gaugeTrapFlashDuration);
+    ctx.save();
+    ctx.globalAlpha = flashAlpha * (Math.sin(gaugeFlashTimer * 30) > 0 ? 1 : 0.3);
+    ctx.fillStyle = "#FF4444";
+    roundRect(ctx, barX, barY, barWidth, barHeight, barRadius);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 80% 이상: 반짝임
+  if (fillRatio >= 0.8 && !isFever) {
+    const fillWidth = barWidth * fillRatio;
+    const now = Date.now() / 1000;
+    for (let i = 0; i < 4; i++) {
+      const phase = (now * 1.2 + i * 0.25) % 1.0;
+      const sparkX = barX + fillWidth * phase;
+      const sparkY = barY + barHeight / 2;
+      const sparkAlpha = Math.sin(phase * Math.PI) * (0.5 + 0.5 * Math.sin(now * 8 + i * 2));
+      if (sparkAlpha > 0.1) {
+        ctx.globalAlpha = sparkAlpha * 0.9;
+        ctx.fillStyle = "#FFFFFF";
+        ctx.beginPath();
+        ctx.arc(sparkX, sparkY, s(2.5 + Math.sin(now * 6 + i) * 1), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+    const pulseAlpha = 0.12 + 0.08 * Math.sin(now * 6);
+    ctx.globalAlpha = pulseAlpha;
+    ctx.fillStyle = "#FFFFFF";
+    roundRect(ctx, barX, barY, fillWidth, barHeight, barRadius);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // 100% 번쩍 플래시
+  if (feverIntro && feverIntroTimer < 0.3) {
+    const flashAlpha = (1 - feverIntroTimer / 0.3) * 0.7;
+    ctx.globalAlpha = flashAlpha;
+    ctx.fillStyle = "#FFFFFF";
+    roundRect(ctx, barX - s(2), barY - s(2), barWidth + s(4), barHeight + s(4), barRadius + s(1));
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Fever 라벨
+  if (isFever) {
+    ctx.textAlign = "center";
+    const feverWarning = feverTimer <= CONFIG.feverWarningTime && feverTimer > 0;
+    ctx.fillStyle = feverWarning ? THEME.coral : THEME.gold;
+    ctx.font = `bold ${s(13)}px ${FONT.number}`;
+    ctx.fillText(`FEVER! ${Math.ceil(feverTimer)}s`, canvasWidth / 2, barY + barHeight + s(5));
+  }
+}
+
+function renderGrid() {
+  const cs = gridLayout.cellSize;
+  const r = s(12); // 셀 둥근 모서리
+
+  // 그리드 전체 영역 배경
+  const pad = s(8);
+  ctx.fillStyle = THEME.bgGrid;
+  roundRect(ctx,
+    gridLayout.offsetX - pad,
+    gridLayout.offsetY - pad,
+    gridLayout.totalWidth + pad * 2,
+    gridLayout.totalHeight + pad * 2,
+    s(16));
+  ctx.fill();
+
+  for (const cell of gridLayout.cells) {
+    // 외곽 그림자 (입체감)
+    ctx.fillStyle = THEME.shadow;
+    roundRect(ctx, cell.x + s(1.5), cell.y + s(2), cs, cs, r);
+    ctx.fill();
+
+    // 셀 배경
+    ctx.fillStyle = THEME.gridCellBg;
+    roundRect(ctx, cell.x, cell.y, cs, cs, r);
+    ctx.fill();
+
+    // 셀 상단 하이라이트 (입체감)
+    ctx.save();
+    roundRect(ctx, cell.x, cell.y, cs, cs, r);
+    ctx.clip();
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(cell.x, cell.y, cs, cs * 0.35);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // 중앙 원형 홈 (타겟 등장 위치 힌트)
+    const holeR = cs * 0.3;
+    ctx.fillStyle = "rgba(120, 100, 80, 0.08)";
+    ctx.beginPath();
+    ctx.arc(cell.centerX, cell.centerY, holeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 홈 안쪽 밝은 하이라이트 (오목한 느낌)
+    ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.beginPath();
+    ctx.arc(cell.centerX, cell.centerY + holeR * 0.15, holeR * 0.75, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 셀 테두리
+    ctx.strokeStyle = THEME.gridLine;
+    ctx.lineWidth = s(1);
+    roundRect(ctx, cell.x, cell.y, cs, cs, r);
+    ctx.stroke();
+  }
+}
+
+function renderTargets() {
+  for (const t of targets) {
+    const cell = gridLayout.cells[t.cellIndex];
+    const cx = cell.centerX;
+    const cy = cell.centerY + (t.bounceOffset || 0);
+    const baseSize = gridLayout.cellSize * 0.35;
+    const size = baseSize * t.scale;
+
+    if (size <= 0 && t.state !== "pop") continue;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // pop 상태: Squash & Stretch + 알파 + 회전 적용
+    if (t.state === "pop") {
+      const sx = t.scaleX || 1;
+      const sy = t.scaleY || 1;
+      if (sx <= 0.01 && sy <= 0.01) { ctx.restore(); continue; }
+      ctx.globalAlpha = t.hitAlpha || 1;
+      if (t.hitRotation) ctx.rotate(t.hitRotation);
+      ctx.scale(sx, sy);
+    }
+
+    // 타이밍 타겟 떨림/멈춤/발광 (모든 시각 모드 공통)
+    if (t.type === "timing" && t.state === "std") {
+      const iScale = t.indicatorScale;
+      const inE3 = iScale <= CONFIG.timingE3TrembleStart;
+      const isStill = iScale <= CONFIG.timingE3StillPoint;
+
+      if (isStill) {
+        // 멈춤 + 금색 발광 (최적 터치 타이밍)
+        ctx.shadowColor = "#FFD700";
+        ctx.shadowBlur = 14 * scaleRatio;
+        // 멈춤 진입 시 흰색 링 반짝 (1회)
+        if (!t._stillFlashed) {
+          t._stillFlashed = true;
+          const cell = gridLayout.cells[t.cellIndex];
+          hitFlashes.push({
+            x: cell.centerX, y: cell.centerY + (t.bounceOffset || 0),
+            timer: 0, duration: 0.15, startAlpha: 0.5, alpha: 0.5,
+            startRadius: baseSize * 1.5, radius: baseSize * 1.5,
+            color: THEME.gold, startLineWidth: 3 * scaleRatio, lineWidth: 3 * scaleRatio
+          });
+        }
+      } else if (inE3) {
+        // E-3 구간: 빠른 주기 떨림 ("지금이야!" 힌트)
+        const shake = CONFIG.timingA_e3ShakeIntensity * scaleRatio;
+        const phase = (Date.now() % CONFIG.timingA_e3ShakePeriod) / CONFIG.timingA_e3ShakePeriod;
+        const shakeX = Math.sin(phase * Math.PI * 2) * shake;
+        const shakeY = Math.cos(phase * Math.PI * 2 * 1.3) * shake * 0.5;
+        ctx.translate(shakeX, shakeY);
+      } else {
+        // E-3 이전: 일반 랜덤 떨림
+        const shakeX = (Math.random() - 0.5) * CONFIG.timingShakeIntensity * scaleRatio;
+        const shakeY = (Math.random() - 0.5) * CONFIG.timingShakeIntensity * scaleRatio;
+        ctx.translate(shakeX, shakeY);
+      }
+    }
+
+    // pop 상태에서는 baseSize를 직접 사용 (scaleX/scaleY가 변형 담당)
+    const drawSize = t.state === "pop" ? baseSize : size;
+
+    // 모드 C: 하트비트 스케일 적용 (std 상태에서만)
+    if (t.type === "timing" && t.state === "std" && CONFIG.timingVisualMode === 'C') {
+      const progress = 1 - t.indicatorScale; // 0→1 진행
+      const period = lerp(CONFIG.timingC_periodStart, CONFIG.timingC_periodEnd, progress);
+      const pulsePhase = (Date.now() / 1000 % period) / period;
+      const pulse = CONFIG.timingC_pulseMin + (CONFIG.timingC_pulseMax - CONFIG.timingC_pulseMin) * (0.5 + 0.5 * Math.sin(pulsePhase * Math.PI * 2));
+      ctx.scale(pulse, pulse);
+    }
+
+    // 모드 A: E-3 구간 타겟 발광
+    if (t.type === "timing" && t.state === "std" && CONFIG.timingVisualMode === 'A') {
+      const inE3 = t.indicatorScale <= CONFIG.timingE2Threshold;
+      if (inE3) {
+        ctx.shadowColor = "#FFD700";
+        ctx.shadowBlur = CONFIG.timingA_e3GlowBlur * scaleRatio;
+      }
+    }
+
+    // 이미지 렌더링 시도 → 실패 시 코드 렌더링 폴백
+    if (!drawTargetImage(t, drawSize)) {
+      switch (t.type) {
+        case "basic": drawBasicTarget(drawSize, t); break;
+        case "trap": drawTrapTarget(drawSize, t); break;
+        case "timing": drawTimingTarget(drawSize, t, cx, cy); break;
+        case "fever": drawFeverTarget(drawSize, t); break;
+      }
+    }
+
+    ctx.restore();
+
+    // 타이밍 인디케이터 (타겟 밖에서 그림)
+    if (t.type === "timing" && t.state !== "pop" && t.state !== "despawning") {
+      const mode = CONFIG.timingVisualMode;
+      if (mode === 'A') {
+        drawTimingIndicatorA(cx, cy + (t.bounceOffset || 0), baseSize, t.indicatorScale);
+      } else if (mode === 'B') {
+        drawTimingIndicatorB(cx, cy + (t.bounceOffset || 0), baseSize, t.indicatorScale);
+      } else if (mode === 'C') {
+        drawTimingIndicatorC(cx, cy + (t.bounceOffset || 0), baseSize, t.indicatorScale, t);
+      }
+    }
+  }
+}
+
+// ---- 피냐타 렌더링 ----
+function renderPinata() {
+  if (pinataScale <= 0) return;
+
+  ctx.save();
+  ctx.translate(pinataX, pinataY);
+
+  // 흔들림 회전
+  if (pinataRotation !== 0) {
+    ctx.rotate(pinataRotation);
+  }
+
+  // 스케일 (등장 시 easeOutBack, 폭발 시 raw)
+  const displayScale = pinataScale <= 1 ? easeOutBack(pinataScale) : pinataScale;
+  ctx.scale(displayScale, displayScale);
+
+  const pinataImg = getImage(ASSETS.pinata.image);
+  if (pinataImg) {
+    const aspect = pinataImg.naturalWidth / pinataImg.naturalHeight;
+    const drawH = pinataRadius * 2;
+    const drawW = drawH * aspect;
+    ctx.drawImage(pinataImg, -drawW / 2, -drawH / 2, drawW, drawH);
+  } else {
+    drawPinataCharacter(0, 0, pinataRadius);
+  }
+
+  ctx.restore();
+}
+
+// ============================================================
+// 타겟 이미지 렌더링
+// ============================================================
+
+// 이미지가 있으면 렌더링하고 true 반환, 없으면 false (코드 렌더링 폴백)
+function drawTargetImage(target, size) {
+  const assetDef = ASSETS.targets[target.type];
+  if (!assetDef) return false;
+
+  // 상태에 따라 이미지 경로 결정
+  let imgPath;
+  if (target.state === "pop" && assetDef.images.pop) {
+    imgPath = assetDef.images.pop;
+  } else if (assetDef.images.std) {
+    imgPath = assetDef.images.std;
+  } else {
+    return false;
+  }
+
+  const img = getImage(imgPath);
+  if (!img) return false;
+
+  // 비율 유지하면서 타겟 칸 크기에 맞춤
+  const drawDiameter = size * 2;
+  const aspect = img.naturalWidth / img.naturalHeight;
+  let drawW, drawH;
+  if (aspect >= 1) {
+    drawW = drawDiameter;
+    drawH = drawDiameter / aspect;
+  } else {
+    drawH = drawDiameter;
+    drawW = drawDiameter * aspect;
+  }
+
+  ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+  return true;
+}
+
+// ============================================================
+// 타겟 코드 렌더링 (이미지 없을 때 폴백)
+// ============================================================
+
+// -- 기본 타겟: 원형 + 귀여운 표정 --
+function drawBasicTarget(size, target) {
+  const colors = ASSETS.targets.basic.colors;
+
+  // 몸체
+  ctx.beginPath();
+  ctx.arc(0, 0, size, 0, Math.PI * 2);
+  ctx.fillStyle = colors.main;
+  ctx.fill();
+
+  // 볼터치
+  ctx.beginPath();
+  ctx.arc(-size * 0.5, size * 0.2, size * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 138, 128, 0.4)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(size * 0.5, size * 0.2, size * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  const isPop = target.state === "pop";
+
+  // 눈
+  ctx.fillStyle = colors.face;
+  if (isPop) {
+    // ^^ 눈
+    ctx.lineWidth = s(2);
+    ctx.strokeStyle = colors.face;
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.3, -size * 0.15);
+    ctx.lineTo(-size * 0.2, -size * 0.3);
+    ctx.lineTo(-size * 0.1, -size * 0.15);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(size * 0.1, -size * 0.15);
+    ctx.lineTo(size * 0.2, -size * 0.3);
+    ctx.lineTo(size * 0.3, -size * 0.15);
+    ctx.stroke();
+  } else {
+    // 점 눈
+    ctx.beginPath();
+    ctx.arc(-size * 0.2, -size * 0.15, size * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(size * 0.2, -size * 0.15, size * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 입 (3 모양)
+  if (!isPop) {
+    ctx.strokeStyle = colors.face;
+    ctx.lineWidth = s(1.5);
+    ctx.beginPath();
+    ctx.arc(-size * 0.08, size * 0.15, size * 0.1, 0, Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(size * 0.08, size * 0.15, size * 0.1, 0, Math.PI);
+    ctx.stroke();
+  }
+}
+
+function drawBasicTargetIcon(x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  if (!drawTargetImage({ type: "basic", state: "std" }, size / 2)) {
+    drawBasicTarget(size / 2, { state: "std" });
+  }
+  ctx.restore();
+}
+
+// -- 함정 타겟: 가시 원형 + 화난 표정 --
+function drawTrapTarget(size, target) {
+  const colors = ASSETS.targets.trap.colors;
+
+  // 가시
+  const spikeCount = 7;
+  ctx.beginPath();
+  for (let i = 0; i < spikeCount * 2; i++) {
+    const angle = (Math.PI * 2 * i) / (spikeCount * 2) - Math.PI / 2;
+    const r = i % 2 === 0 ? size * 1.25 : size * 0.85;
+    const px = Math.cos(angle) * r;
+    const py = Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = colors.main;
+  ctx.fill();
+
+  // 몸체 원
+  ctx.beginPath();
+  ctx.arc(0, 0, size * 0.8, 0, Math.PI * 2);
+  ctx.fillStyle = "#D32F2F";
+  ctx.fill();
+
+  // 화난 눈 (반원, 위가 평평)
+  ctx.fillStyle = colors.face;
+  // 왼쪽 눈
+  ctx.beginPath();
+  ctx.arc(-size * 0.25, -size * 0.1, size * 0.12, 0, Math.PI);
+  ctx.fill();
+  // 오른쪽 눈
+  ctx.beginPath();
+  ctx.arc(size * 0.25, -size * 0.1, size * 0.12, 0, Math.PI);
+  ctx.fill();
+
+  // 눈썹 (찡그린)
+  ctx.strokeStyle = colors.face;
+  ctx.lineWidth = s(2);
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.4, -size * 0.3);
+  ctx.lineTo(-size * 0.15, -size * 0.2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(size * 0.4, -size * 0.3);
+  ctx.lineTo(size * 0.15, -size * 0.2);
+  ctx.stroke();
+
+  // 꼬인 입
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.2, size * 0.25);
+  ctx.quadraticCurveTo(0, size * 0.15, size * 0.2, size * 0.25);
+  ctx.strokeStyle = colors.face;
+  ctx.lineWidth = s(2);
+  ctx.stroke();
+}
+
+function drawTrapTargetIcon(x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  if (!drawTargetImage({ type: "trap", state: "std" }, size / 2.5)) {
+    drawTrapTarget(size / 2.5, { state: "std" });
+  }
+  ctx.restore();
+}
+
+// -- 타이밍 타겟: 다이아몬드 + 불쌍한 표정 --
+function drawTimingTarget(size, target, worldX, worldY) {
+  const colors = ASSETS.targets.timing.colors;
+
+  // 모드 C: E-3 구간에서 금색 변화
+  const isE3C = CONFIG.timingVisualMode === 'C' && target.state === "std" && target.indicatorScale <= CONFIG.timingE2Threshold;
+  const bodyColor = isE3C ? "#FFD700" : colors.main;
+
+  // 다이아몬드 형태
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.75, 0);
+  ctx.lineTo(0, size);
+  ctx.lineTo(-size * 0.75, 0);
+  ctx.closePath();
+  ctx.fillStyle = bodyColor;
+  ctx.fill();
+
+  // 모드 C: E-3 발광
+  if (isE3C) {
+    ctx.shadowColor = "#FFD700";
+    ctx.shadowBlur = 10 * scaleRatio;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  const isPop = target.state === "pop";
+  const isE3 = target.indicatorScale <= CONFIG.timingE2Threshold;
+
+  if (isPop) {
+    // 환한 웃음
+    ctx.fillStyle = colors.face;
+    // ^^ 눈
+    ctx.lineWidth = s(2);
+    ctx.strokeStyle = colors.face;
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.3, -size * 0.15);
+    ctx.lineTo(-size * 0.2, -size * 0.3);
+    ctx.lineTo(-size * 0.1, -size * 0.15);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(size * 0.1, -size * 0.15);
+    ctx.lineTo(size * 0.2, -size * 0.3);
+    ctx.lineTo(size * 0.3, -size * 0.15);
+    ctx.stroke();
+  } else {
+    // 큰 동그란 눈
+    ctx.fillStyle = "#FFFFFF";
+    ctx.beginPath();
+    ctx.arc(-size * 0.2, -size * 0.15, size * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(size * 0.2, -size * 0.15, size * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    // 눈동자
+    ctx.fillStyle = colors.face;
+    ctx.beginPath();
+    ctx.arc(-size * 0.2, -size * 0.12, size * 0.07, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(size * 0.2, -size * 0.12, size * 0.07, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 눈물
+    ctx.fillStyle = colors.tear;
+    ctx.beginPath();
+    ctx.arc(-size * 0.35, size * 0.0, size * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(size * 0.35, size * 0.0, size * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+
+    // o 입
+    ctx.beginPath();
+    ctx.arc(0, size * 0.25, size * 0.1, 0, Math.PI * 2);
+    ctx.strokeStyle = colors.face;
+    ctx.lineWidth = s(1.5);
+    ctx.stroke();
+  }
+}
+
+function drawTimingTargetIcon(x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  if (!drawTargetImage({ type: "timing", state: "std" }, size / 2)) {
+    drawTimingTarget(size / 2, { state: "std", indicatorScale: 0.6 }, x, y);
+  }
+  ctx.restore();
+  // 인디케이터 미리보기
+  const mode = CONFIG.timingVisualMode;
+  if (mode === 'A') drawTimingIndicatorA(x, y, size / 2, 0.6);
+  else if (mode === 'B') drawTimingIndicatorB(x, y, size / 2, 0.6);
+  else if (mode === 'C') drawTimingIndicatorC(x, y, size / 2, 0.6, { indicatorScale: 0.6 });
+}
+
+// -- 타이밍 인디케이터 모드 A: Approach Circle (osu! 개선형) --
+function drawTimingIndicatorA(cx, cy, baseSize, indicatorScale) {
+  if (indicatorScale <= 0) return;
+
+  const maxRadius = baseSize * 2.2;
+  const radius = maxRadius * indicatorScale;
+  const progress = 1 - indicatorScale; // 0→1 진행
+
+  // 색상 변화: 민트 → 노란색 → 금색
+  let r, g, b;
+  if (progress < 0.5) {
+    const t = progress / 0.5;
+    r = Math.round(lerp(126, 255, t));
+    g = Math.round(lerp(206, 255, t));
+    b = Math.round(lerp(192, 100, t));
+  } else {
+    const t = (progress - 0.5) / 0.5;
+    r = Math.round(lerp(255, 255, t));
+    g = Math.round(lerp(255, 215, t));
+    b = Math.round(lerp(100, 0, t));
+  }
+
+  // 두께 변화: 얇은 것 → 두꺼운 것
+  const lineW = lerp(CONFIG.timingA_lineWidthMin, CONFIG.timingA_lineWidthMax, progress);
+  const opacity = lerp(0.5, 0.9, progress);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  ctx.lineWidth = lineW * scaleRatio;
+
+  // E-3 근처: 강한 글로우
+  const inE3 = indicatorScale <= CONFIG.timingE2Threshold;
+  if (inE3) {
+    ctx.shadowColor = "#FFD700";
+    ctx.shadowBlur = CONFIG.timingA_e3GlowBlur * scaleRatio;
+  } else {
+    ctx.shadowColor = ASSETS.indicator.glowColor;
+    ctx.shadowBlur = ASSETS.indicator.glowBlur * scaleRatio * 0.5;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// -- 타이밍 인디케이터 모드 B: 게이지 충전형 (Fill-Up) --
+function drawTimingIndicatorB(cx, cy, baseSize, indicatorScale) {
+  const progress = 1 - indicatorScale; // 0→1 진행 (충전량)
+  const radius = baseSize * 1.3;
+  const gaugeW = CONFIG.timingB_gaugeWidth * scaleRatio;
+
+  ctx.save();
+
+  // 원형 배경 (크림톤 반투명)
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(232, 224, 216, ${CONFIG.timingB_bgAlpha})`;
+  ctx.fill();
+
+  // 게이지 색상: 구간별 변화
+  let gaugeColor;
+  if (progress < 0.5) {
+    gaugeColor = "rgba(126, 206, 192, 0.8)";       // E-1: 민트
+  } else if (progress < 0.8) {
+    gaugeColor = "rgba(255, 235, 59, 0.9)";         // E-2: 노란색
+  } else {
+    gaugeColor = "rgba(255, 215, 0, 1.0)";          // E-3: 금색
+  }
+
+  // 100% 초과 (오버플로): 코랄
+  if (indicatorScale <= 0.01) {
+    gaugeColor = "rgba(255, 138, 128, 0.9)";
+  }
+
+  // 원형 게이지 호 (아래에서 시계방향으로 채워짐: -90도 시작)
+  const startAngle = -Math.PI / 2;
+  const endAngle = startAngle + (Math.PI * 2 * progress);
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, startAngle, endAngle);
+  ctx.strokeStyle = gaugeColor;
+  ctx.lineWidth = gaugeW;
+  ctx.lineCap = "round";
+
+  // E-3 구간: 글로우
+  if (progress >= 0.8) {
+    ctx.shadowColor = "#FFD700";
+    ctx.shadowBlur = 8 * scaleRatio;
+  }
+
+  ctx.stroke();
+
+  // 게이지 끝점에 작은 원 (진행 표시)
+  if (progress > 0.02 && progress < 0.99) {
+    const dotX = cx + Math.cos(endAngle) * radius;
+    const dotY = cy + Math.sin(endAngle) * radius;
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, gaugeW * 0.7, 0, Math.PI * 2);
+    ctx.fillStyle = gaugeColor;
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// -- 타이밍 인디케이터 모드 C: 하트비트형 (Pulse) --
+function drawTimingIndicatorC(cx, cy, baseSize, indicatorScale, target) {
+  const progress = 1 - indicatorScale; // 0→1 진행
+  const inE3 = indicatorScale <= CONFIG.timingE2Threshold;
+
+  // 박동 주기 계산
+  const period = lerp(CONFIG.timingC_periodStart, CONFIG.timingC_periodEnd, progress);
+  const pulsePhase = (Date.now() / 1000 % period) / period;
+  const pulseValue = 0.5 + 0.5 * Math.sin(pulsePhase * Math.PI * 2);
+
+  // 박동 최고점에서 링 이펙트 (충격파)
+  if (pulseValue > 0.9) {
+    const ringAlpha = (pulseValue - 0.9) / 0.1 * CONFIG.timingC_ringAlpha;
+    const ringRadius = baseSize * (1.2 + pulseValue * 0.3);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+    ctx.strokeStyle = inE3 ? `rgba(255, 215, 0, ${ringAlpha})` : `rgba(126, 206, 192, ${ringAlpha})`;
+    ctx.lineWidth = 2 * scaleRatio;
+    if (inE3) {
+      ctx.shadowColor = "#FFD700";
+      ctx.shadowBlur = 6 * scaleRatio;
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 진행도 표시: 타겟 아래에 작은 도트 (E-1/E-2/E-3 구간 표시)
+  const dotRadius = 2.5 * scaleRatio;
+  const dotY = cy + baseSize * 1.4;
+  const dotSpacing = 8 * scaleRatio;
+  const dots = [
+    { threshold: 0.5, color: THEME.mintLight },    // E-1
+    { threshold: 0.8, color: "#FFEB3B" },    // E-2
+    { threshold: 1.0, color: "#FFD700" },    // E-3
+  ];
+  ctx.save();
+  for (let i = 0; i < dots.length; i++) {
+    const dx = cx + (i - 1) * dotSpacing;
+    const filled = progress >= (i === 0 ? 0 : dots[i - 1].threshold);
+    ctx.beginPath();
+    ctx.arc(dx, dotY, dotRadius, 0, Math.PI * 2);
+    if (filled) {
+      ctx.fillStyle = dots[i].color;
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = "rgba(255,255,255,0.3)";
+      ctx.lineWidth = 1 * scaleRatio;
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// -- Fever 타겟: 별 모양 + >w< 표정 --
+function drawFeverTarget(size, target) {
+  const colors = ASSETS.targets.fever.colors;
+
+  // 별 모양 (5각)
+  const points = 5;
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const angle = (Math.PI * 2 * i) / (points * 2) - Math.PI / 2;
+    const r = i % 2 === 0 ? size : size * 0.5;
+    const px = Math.cos(angle) * r;
+    const py = Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = colors.main;
+  ctx.fill();
+
+  // >w< 표정
+  ctx.strokeStyle = colors.face;
+  ctx.lineWidth = s(2);
+
+  // > 눈 (왼쪽)
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.35, -size * 0.2);
+  ctx.lineTo(-size * 0.2, -size * 0.1);
+  ctx.lineTo(-size * 0.35, 0);
+  ctx.stroke();
+
+  // < 눈 (오른쪽)
+  ctx.beginPath();
+  ctx.moveTo(size * 0.35, -size * 0.2);
+  ctx.lineTo(size * 0.2, -size * 0.1);
+  ctx.lineTo(size * 0.35, 0);
+  ctx.stroke();
+
+  // w 입
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.2, size * 0.15);
+  ctx.quadraticCurveTo(-size * 0.1, size * 0.3, 0, size * 0.15);
+  ctx.quadraticCurveTo(size * 0.1, size * 0.3, size * 0.2, size * 0.15);
+  ctx.stroke();
+}
+
+// -- 피냐타 캐릭터 --
+function drawPinataCharacter(cx, cy, r) {
+  const colors = ASSETS.pinata.colors;
+
+  // 몸체 (타원형)
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r * 0.85, r, 0, 0, Math.PI * 2);
+  ctx.fillStyle = colors.body;
+  ctx.fill();
+
+  // 줄무늬 (몸체 클리핑)
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r * 0.85, r, 0, 0, Math.PI * 2);
+  ctx.clip();
+  const stripeH = r * 0.18;
+  ctx.fillStyle = colors.stripe1;
+  ctx.fillRect(cx - r, cy - r * 0.5, r * 2, stripeH);
+  ctx.fillStyle = colors.stripe2;
+  ctx.fillRect(cx - r, cy - r * 0.1, r * 2, stripeH);
+  ctx.fillStyle = colors.stripe3;
+  ctx.fillRect(cx - r, cy + r * 0.3, r * 2, stripeH);
+  ctx.restore();
+
+  // 꼬깔 모자
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r * 1.3);
+  ctx.lineTo(cx - r * 0.25, cy - r * 0.85);
+  ctx.lineTo(cx + r * 0.25, cy - r * 0.85);
+  ctx.closePath();
+  ctx.fillStyle = colors.hat;
+  ctx.fill();
+  // 모자 챙
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - r * 0.85, r * 0.3, r * 0.08, 0, 0, Math.PI * 2);
+  ctx.fillStyle = colors.hat;
+  ctx.fill();
+
+  // 볼터치
+  ctx.beginPath();
+  ctx.arc(cx - r * 0.45, cy + r * 0.15, r * 0.15, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 138, 128, 0.5)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.45, cy + r * 0.15, r * 0.15, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 왼쪽 눈 > (꺽쇠)
+  ctx.strokeStyle = colors.face;
+  ctx.lineWidth = s(3);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.35, cy - r * 0.28);
+  ctx.lineTo(cx - r * 0.18, cy - r * 0.15);
+  ctx.lineTo(cx - r * 0.35, cy - r * 0.02);
+  ctx.stroke();
+
+  // 오른쪽 눈 < (꺽쇠)
+  ctx.beginPath();
+  ctx.moveTo(cx + r * 0.35, cy - r * 0.28);
+  ctx.lineTo(cx + r * 0.18, cy - r * 0.15);
+  ctx.lineTo(cx + r * 0.35, cy - r * 0.02);
+  ctx.stroke();
+
+  // w 입
+  ctx.strokeStyle = colors.face;
+  ctx.lineWidth = s(2);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.18, cy + r * 0.3);
+  ctx.quadraticCurveTo(cx - r * 0.09, cy + r * 0.42, cx, cy + r * 0.3);
+  ctx.quadraticCurveTo(cx + r * 0.09, cy + r * 0.42, cx + r * 0.18, cy + r * 0.3);
+  ctx.stroke();
+
+  // 반짝이 별 (주위 회전)
+  const sparkleTime = Date.now() / 400;
+  for (let i = 0; i < 4; i++) {
+    const angle = sparkleTime + (Math.PI * 2 * i) / 4;
+    const sr = r * 1.15;
+    const sx = cx + Math.cos(angle) * sr;
+    const sy = cy + Math.sin(angle) * sr * 0.8;
+    const sz = r * 0.08 * (0.7 + 0.3 * Math.sin(sparkleTime * 2 + i));
+    drawStar5(sx, sy, sz, colors.stripe1, false);
+  }
+}
+
+// ============================================================
+// 이펙트 렌더링
+// ============================================================
+function renderHitFlashes() {
+  for (const f of hitFlashes) {
+    ctx.globalAlpha = f.alpha;
+    ctx.strokeStyle = f.color;
+    ctx.lineWidth = f.lineWidth;
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderParticles() {
+  for (const p of particles) {
+    const alpha = clamp(p.life, 0, 1);
+    const sz = p.size * clamp(p.life, 0.3, 1);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+
+    if (p.shape === "star") {
+      drawParticleStar(p.x, p.y, sz, p.rotation);
+    } else if (p.shape === "cross") {
+      drawParticleCross(p.x, p.y, sz, p.rotation);
+    } else {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawParticleStar(x, y, r, rot) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const outerAngle = (Math.PI * 2 * i) / 5 - Math.PI / 2;
+    const innerAngle = outerAngle + Math.PI / 5;
+    const ox = Math.cos(outerAngle) * r;
+    const oy = Math.sin(outerAngle) * r;
+    const ix = Math.cos(innerAngle) * r * 0.4;
+    const iy = Math.sin(innerAngle) * r * 0.4;
+    if (i === 0) ctx.moveTo(ox, oy);
+    else ctx.lineTo(ox, oy);
+    ctx.lineTo(ix, iy);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawParticleCross(x, y, r, rot) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  const w = r * 0.35;
+  ctx.strokeStyle = ctx.fillStyle;
+  ctx.lineWidth = w;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-r, -r);
+  ctx.lineTo(r, r);
+  ctx.moveTo(r, -r);
+  ctx.lineTo(-r, r);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function renderFloatingTexts() {
+  const now = Date.now() / 1000;
+  for (const ft of floatingTexts) {
+    const alpha = clamp(ft.life, 0, 1);
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // 등장 시 Scale 0→1.3→1.0 바운스 팝인 (처음 25% 구간)
+    const age = 1 - ft.life; // 0→1
+    let dynamicScale = ft.scale;
+    if (age < 0.25) {
+      const t = age / 0.25;
+      dynamicScale *= t < 0.6 ? lerp(0, 1.3, easeOutBack(t / 0.6)) : lerp(1.3, 1.0, (t - 0.6) / 0.4);
+    }
+
+    // 타이밍 E-3: 폰트 2배
+    const isE3 = ft.key === "timingE3";
+    const baseFontSize = isE3 ? s(40) : s(20);
+    const fontSize = baseFontSize * dynamicScale;
+    ctx.font = `bold ${fontSize}px ${FONT.number}`;
+
+    // 타이밍 E-3: 글로우 효과
+    if (isE3) {
+      ctx.shadowColor = "#FFD700";
+      ctx.shadowBlur = s(12) * alpha;
+    }
+
+    // 외곽선 (가독성)
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.lineWidth = isE3 ? s(4) : s(3);
+    ctx.strokeText(ft.text, ft.x, ft.y);
+
+    // 색상 결정
+    if (ft.key === "feverTap") {
+      // Fever: 무지개 색상 순환
+      const hue = ((now - ft.spawnTime) * 360 + age * 720) % 360;
+      ctx.fillStyle = `hsl(${hue}, 100%, 70%)`;
+    } else if (isE3) {
+      // E-3: 금색 그라데이션
+      const grad = ctx.createLinearGradient(ft.x - s(40), ft.y, ft.x + s(40), ft.y);
+      grad.addColorStop(0, "#FFF8E1");
+      grad.addColorStop(0.3, "#FFD700");
+      grad.addColorStop(0.7, "#FF6F00");
+      grad.addColorStop(1, "#FFF8E1");
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = ft.color;
+    }
+    ctx.fillText(ft.text, ft.x, ft.y);
+
+    // 글로우 초기화
+    if (isE3) {
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderRipples() {
+  for (const r of ripples) {
+    if (r.delay && r.delay > 0) continue;
+    const alpha = clamp(r.life, 0, 1);
+    ctx.globalAlpha = alpha * 0.6;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, Math.max(0, r.radius), 0, Math.PI * 2);
+    ctx.strokeStyle = THEME.mintLight;
+    ctx.lineWidth = (r.lineWidth || s(2)) * alpha;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- Timeup 화면 ----
+function renderTimeup() {
+  // 그리드 배경 유지 (타겟 없음)
+  renderGrid();
+
+  // 크림 오버레이
+  ctx.fillStyle = "rgba(255, 248, 240, 0.8)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight / 2;
+
+  // 캐릭터 (향후 별도 이미지 삽입 예정)
+  if (ASSETS.timeup.image) {
+    const img = getImage(ASSETS.timeup.image);
+    if (img) {
+      const aspect = img.naturalWidth / img.naturalHeight;
+      const drawH = s(100);
+      const drawW = drawH * aspect;
+      ctx.drawImage(img, cx - drawW / 2, cy - drawH / 2 + s(10), drawW, drawH);
+    }
+  }
+
+  // "Time Up!" 텍스트
+  const progress = 1 - timeupTimer / CONFIG.timeupDisplayDuration; // 0→1
+  const textScale = progress < 0.2 ? easeOutBack(progress / 0.2) : 1;
+  const fontSize = s(48) * textScale;
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `bold ${fontSize}px ${FONT.text}`;
+
+  ctx.strokeStyle = "rgba(255, 138, 128, 0.3)";
+  ctx.lineWidth = s(5);
+  ctx.strokeText("Time Up!", cx, cy);
+
+  ctx.fillStyle = THEME.coral;
+  ctx.fillText("Time Up!", cx, cy);
+}
+
+function drawTimeupCharacter(cx, cy) {
+  const colors = ASSETS.timeup.colors;
+  const r = s(50); // 몸체 반지름
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // 몸체 (둥근 원)
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = colors.body;
+  ctx.fill();
+
+  // 볼터치
+  ctx.beginPath();
+  ctx.arc(-r * 0.5, r * 0.15, r * 0.18, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 138, 128, 0.4)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(r * 0.5, r * 0.15, r * 0.18, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 큰 눈 (흰자 + 동자) — 울상으로 위를 봄
+  // 왼쪽 눈
+  ctx.beginPath();
+  ctx.arc(-r * 0.25, -r * 0.15, r * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-r * 0.25, -r * 0.22, r * 0.1, 0, Math.PI * 2);
+  ctx.fillStyle = colors.face;
+  ctx.fill();
+  // 하이라이트
+  ctx.beginPath();
+  ctx.arc(-r * 0.3, -r * 0.28, r * 0.04, 0, Math.PI * 2);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fill();
+
+  // 오른쪽 눈
+  ctx.beginPath();
+  ctx.arc(r * 0.25, -r * 0.15, r * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(r * 0.25, -r * 0.22, r * 0.1, 0, Math.PI * 2);
+  ctx.fillStyle = colors.face;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(r * 0.2, -r * 0.28, r * 0.04, 0, Math.PI * 2);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fill();
+
+  // 처진 눈썹 (슬픈)
+  ctx.strokeStyle = colors.face;
+  ctx.lineWidth = s(2.5);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.42, -r * 0.4);
+  ctx.lineTo(-r * 0.12, -r * 0.35);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(r * 0.42, -r * 0.4);
+  ctx.lineTo(r * 0.12, -r * 0.35);
+  ctx.stroke();
+
+  // 눈물
+  const tearDrop = (tx, ty) => {
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.quadraticCurveTo(tx - r * 0.06, ty + r * 0.15, tx, ty + r * 0.2);
+    ctx.quadraticCurveTo(tx + r * 0.06, ty + r * 0.15, tx, ty);
+    ctx.fillStyle = colors.tear;
+    ctx.fill();
+  };
+  // 흘러내리는 위치를 시간에 따라 살짝 변화
+  const tearOffset = Math.sin(Date.now() / 300) * r * 0.05;
+  tearDrop(-r * 0.45, -r * 0.0 + tearOffset);
+  tearDrop(r * 0.45, r * 0.02 - tearOffset);
+
+  // 입 (ㅠ 모양 — 울상)
+  ctx.strokeStyle = colors.face;
+  ctx.lineWidth = s(2);
+  ctx.beginPath();
+  ctx.arc(0, r * 0.35, r * 0.15, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ---- Result 화면 ----
+function renderResult() {
+  const cx = canvasWidth / 2;
+  const now = Date.now() / 1000;
+  let totalStars = 0;
+  if (score >= CONFIG.star3Threshold) totalStars = 3;
+  else if (score >= CONFIG.star2Threshold) totalStars = 2;
+  else if (score >= CONFIG.star1Threshold) totalStars = 1;
+
+  // B-4: 배경: 연한 민트
+  ctx.fillStyle = THEME.bgSecondary;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // B-4: 배경 부유 반짝임 (천천히 올라가는 금/민트 반짝임)
+  const sparkleBase = totalStars >= 3 && resultStarsRevealed >= 3 ? 30 : 10;
+  for (let i = 0; i < sparkleBase; i++) {
+    const sx = ((now * 0.015 + i * 0.083) % 1.0) * canvasWidth;
+    // 아래→위로 천천히 올라감
+    const sy = (1.0 - ((now * 0.025 * (0.3 + i * 0.07) + i * 0.09) % 1.0)) * canvasHeight;
+    const sa = 0.12 + 0.08 * Math.sin(now * 2.5 + i * 1.5);
+    ctx.globalAlpha = sa;
+    ctx.fillStyle = i % 3 === 0 ? THEME.gold : (i % 3 === 1 ? "#C0C0C0" : THEME.mintLight);
+    ctx.beginPath();
+    ctx.arc(sx, sy, s(1.5 + Math.sin(now + i) * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // B-4: 별 파티클 렌더링
+  for (const p of resultStarParticles) {
+    const alpha = clamp(p.life / p.maxLife, 0, 1);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rotation);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    // 작은 별 모양
+    const sz = s(p.size) * alpha;
+    drawStar5(0, 0, sz, p.color, true);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // 결과 타이틀
+  const titleY = canvasHeight * 0.13;
+  const titleSize = s(32);
+  ctx.fillStyle = "rgba(91, 168, 156, 0.15)";
+  ctx.font = `bold ${titleSize}px ${FONT.text}`;
+  ctx.fillText("Result", cx + s(2), titleY + s(3));
+  ctx.strokeStyle = "rgba(91, 168, 156, 0.3)";
+  ctx.lineWidth = s(3);
+  ctx.strokeText("Result", cx, titleY);
+  const titleGrad = ctx.createLinearGradient(cx - s(60), titleY - s(16), cx + s(60), titleY + s(16));
+  titleGrad.addColorStop(0, THEME.mintDark);
+  titleGrad.addColorStop(0.5, THEME.mint);
+  titleGrad.addColorStop(1, THEME.mintDark);
+  ctx.fillStyle = titleGrad;
+  ctx.fillText("Result", cx, titleY);
+
+  // "SCORE" 라벨
+  ctx.fillStyle = THEME.textSecondary;
+  ctx.font = `bold ${s(14)}px ${FONT.text}`;
+  ctx.fillText("SCORE", cx, canvasHeight * 0.22);
+
+  // B-2: 점수 카운트업 (스케일 바운스 + 구간별 색상 변화)
+  const baseFontSize = s(56);
+  let scoreScale = 1.0;
+  if (resultPhase === "countup") {
+    // 카운트 중 미세 바운스 (1.0 ↔ 1.05)
+    scoreScale = 1.0 + 0.05 * Math.abs(Math.sin(resultTimer * 8));
+  } else if (resultScorePopTimer > 0) {
+    // 카운트 완료 시 팽창 (1.0 → 1.3 → 1.0)
+    const popP = resultScorePopTimer / 0.3;
+    scoreScale = 1.0 + 0.3 * Math.sin(popP * Math.PI);
+  }
+  const scoreSize = baseFontSize * scoreScale;
+  ctx.font = `bold ${scoreSize}px ${FONT.number}`;
+  const scoreY = canvasHeight * 0.31;
+
+  ctx.fillStyle = "rgba(74, 74, 74, 0.1)";
+  ctx.fillText(resultCountScore.toLocaleString(), cx + s(2), scoreY + s(3));
+
+  // B-2: 구간별 색상 변화
+  const scoreVal = resultCountScore;
+  let scoreColor = THEME.textPrimary;
+  if (scoreVal >= CONFIG.star3Threshold) scoreColor = THEME.gold;
+  else if (scoreVal >= CONFIG.star2Threshold) scoreColor = "#E8C840";
+  else if (scoreVal >= CONFIG.star1Threshold) scoreColor = THEME.mint;
+  ctx.fillStyle = scoreColor;
+  ctx.fillText(resultCountScore.toLocaleString(), cx, scoreY);
+
+  ctx.globalAlpha = 0.12 + 0.08 * Math.sin(now * 3);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillText(resultCountScore.toLocaleString(), cx, scoreY - s(1));
+  ctx.globalAlpha = 1;
+
+  // B-1: 별 등급 (순차 등장 + 바운스 + 회전 + 파티클)
+  const starY = canvasHeight * 0.45;
+  const starSpacing = s(60);
+  const starBaseSize = s(24);
+
+  for (let i = 0; i < 3; i++) {
+    const starX = cx + (i - 1) * starSpacing;
+    const earned = i < resultStarsRevealed;
+    const animT = resultStarAnimTimers[i];
+
+    if (!earned && resultPhase !== "done") {
+      // 미획득 + 아직 진행 중: 작은 빈 별
+      const sz = starBaseSize * 0.8;
+      drawStar5(starX, starY, sz, false, i);
+      continue;
+    }
+
+    if (!earned) {
+      // done 상태에서 미획득 별
+      drawStar5(starX, starY, starBaseSize * 0.8, false, i);
+      continue;
+    }
+
+    // B-1: 바운스 스케일 (0 → 1.5 → 1.0)
+    let starScale = 1;
+    if (animT > 0 && animT < 1) {
+      const t = animT;
+      if (t < 0.4) {
+        starScale = lerp(0, 1.5, easeOutBack(t / 0.4));
+      } else {
+        starScale = lerp(1.5, 1.0, (t - 0.4) / 0.6);
+      }
+    }
+
+    const sz = starBaseSize * starScale;
+    const rotation = resultStarRotations[i];
+
+    // 획득한 별: 글로우
+    const glowAlpha = 0.15 + 0.08 * Math.sin(now * 3 + i * 1.2);
+    ctx.globalAlpha = glowAlpha * (animT > 0 ? Math.min(animT * 3, 1) : 1);
+    ctx.fillStyle = THEME.gold;
+    ctx.beginPath();
+    ctx.arc(starX, starY, sz * 1.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // B-1: 회전 적용하여 별 렌더링
+    ctx.save();
+    ctx.translate(starX, starY);
+    ctx.rotate(rotation);
+    drawStar5(0, 0, sz, true, i);
+    ctx.restore();
+
+    // 획득한 별 위 반짝임
+    if (animT >= 1 || resultPhase === "done") {
+      for (let sp = 0; sp < 2; sp++) {
+        const angle = now * 2.5 + i * 2.1 + sp * Math.PI;
+        const dist = sz * (0.6 + 0.3 * Math.sin(now * 1.8 + sp * 3));
+        const spX = starX + Math.cos(angle) * dist;
+        const spY = starY + Math.sin(angle) * dist;
+        const spAlpha = 0.4 + 0.3 * Math.sin(now * 4 + i + sp * 2);
+        ctx.globalAlpha = spAlpha;
+        ctx.fillStyle = THEME.gold;
+        ctx.beginPath();
+        ctx.arc(spX, spY, s(1.5), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // 등급 텍스트
+  if (resultPhase === "done" || (resultPhase === "stars" && resultStarsRevealed >= totalStars)) {
+    const gradeTexts = ["Try Again!", "Good!", "Great!", "Perfect!"];
+    const gradeY = canvasHeight * 0.55;
+    const gradeFontSize = s(24);
+    ctx.font = `bold ${gradeFontSize}px ${FONT.text}`;
+    ctx.fillStyle = "rgba(74, 74, 74, 0.15)";
+    ctx.fillText(gradeTexts[totalStars], cx + s(1), gradeY + s(2));
+
+    if (totalStars === 0) {
+      ctx.fillStyle = THEME.textSecondary;
+    } else if (totalStars === 1) {
+      ctx.fillStyle = THEME.mint;
+    } else if (totalStars === 2) {
+      ctx.fillStyle = THEME.mintDark;
+    } else {
+      const gGrad = ctx.createLinearGradient(cx - s(50), gradeY - s(12), cx + s(50), gradeY + s(12));
+      gGrad.addColorStop(0, "#FFF8E1");
+      gGrad.addColorStop(0.3, THEME.gold);
+      gGrad.addColorStop(0.7, "#FFC107");
+      gGrad.addColorStop(1, "#FFF8E1");
+      ctx.fillStyle = gGrad;
+    }
+    ctx.fillText(gradeTexts[totalStars], cx, gradeY);
+  }
+
+  // B-3: 버튼 (슬라이드업 등장 + 미세 맥박)
+  if (resultPhase === "done" && resultButtonTimer > 0) {
+    const btnW = s(150);
+    const btnH = s(50);
+    const gap = s(12);
+    const totalW = btnW * 2 + gap;
+    const startX = cx - totalW / 2;
+    const baseBtnY = canvasHeight * 0.78;
+
+    // B-3: 슬라이드업 (0.3초 동안 아래에서 올라옴)
+    const slideProgress = clamp(resultButtonTimer / 0.3, 0, 1);
+    const slideEased = easeOutBack(slideProgress);
+    const slideOffset = (1 - slideEased) * s(40);
+    const btnY = baseBtnY + slideOffset;
+
+    // B-3: 미세 맥박 (1.0 ↔ 1.02)
+    const pulse = slideProgress >= 1 ? 1 + 0.02 * Math.sin(now * Math.PI * 2) : 1;
+
+    ctx.save();
+    ctx.translate(cx, btnY + btnH / 2);
+    ctx.scale(pulse, pulse);
+    ctx.translate(-cx, -(btnY + btnH / 2));
+
+    ctx.globalAlpha = slideEased;
+    drawGameButton(startX, btnY, btnW, btnH, "Retry", "primary", "result_retry");
+    drawGameButton(startX + btnW + gap, btnY, btnW, btnH, "Title", "secondary", "result_title");
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // 3성 화면 플래시
+  if (result3StarFlash > 0) {
+    const flashAlpha = 0.3 * (result3StarFlash / 0.15);
+    ctx.fillStyle = `rgba(255, 215, 0, ${flashAlpha})`;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+}
+
+// ---- Ranking 화면 ----
+function getStarCount(sc) {
+  if (sc >= CONFIG.star3Threshold) return 3;
+  if (sc >= CONFIG.star2Threshold) return 2;
+  if (sc >= CONFIG.star1Threshold) return 1;
+  return 0;
+}
+
+function renderRanking() {
+  const cx = canvasWidth / 2;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // 타이틀
+  ctx.fillStyle = THEME.mintDark;
+  ctx.font = `bold ${s(30)}px ${FONT.text}`;
+  ctx.fillText("Score", cx, canvasHeight * 0.08);
+
+  // 구분선
+  ctx.strokeStyle = THEME.gridLine;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - s(100), canvasHeight * 0.12);
+  ctx.lineTo(cx + s(100), canvasHeight * 0.12);
+  ctx.stroke();
+
+  const scores = loadScores();
+  const listStartY = canvasHeight * 0.17;
+  const rowH = canvasHeight * 0.063;
+
+  for (let i = 0; i < MAX_SCORES; i++) {
+    const y = listStartY + i * rowH;
+    const entry = scores[i];
+
+    // 순위 번호
+    const rankColors = [THEME.gold, "#B8B8B8", "#CD9B6A"];
+    ctx.fillStyle = i < 3 ? rankColors[i] : THEME.textSecondary;
+    ctx.font = `bold ${s(16)}px ${FONT.text}`;
+    ctx.textAlign = "left";
+    ctx.fillText(`${i + 1}.`, cx - s(110), y);
+
+    if (entry) {
+      // 점수
+      ctx.fillStyle = i < 3 ? THEME.textPrimary : THEME.textSecondary;
+      ctx.font = `bold ${s(18)}px ${FONT.number}`;
+      ctx.textAlign = "right";
+      ctx.fillText(entry.score.toLocaleString(), cx + s(30), y);
+
+      // 별 표시
+      const stars = getStarCount(entry.score);
+      const starSize = s(8);
+      for (let j = 0; j < 3; j++) {
+        const sx = cx + s(50) + j * s(18);
+        const starColor = j < stars ? THEME.gold : "rgba(200, 190, 170, 0.25)";
+        drawStar5(sx, y, starSize, starColor, j < stars);
+      }
+    } else {
+      ctx.fillStyle = "rgba(200, 190, 170, 0.3)";
+      ctx.font = `${s(16)}px ${FONT.text}`;
+      ctx.textAlign = "right";
+      ctx.fillText("---", cx + s(30), y);
+    }
+  }
+
+  // 돌아가기 버튼
+  const btnW = s(160);
+  const btnH = s(46);
+  const btnX = cx - btnW / 2;
+  const btnY = canvasHeight * 0.85;
+  drawGameButton(btnX, btnY, btnW, btnH, "Back", "secondary", "ranking_back");
+}
+
+function drawStar5(cx, cy, size, colorOrEarned, filledOrIndex) {
+  const points = 5;
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const angle = (Math.PI * 2 * i) / (points * 2) - Math.PI / 2;
+    const r = i % 2 === 0 ? size : size * 0.45;
+    const px = cx + Math.cos(angle) * r;
+    const py = cy + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+
+  // 문자열이면 단순 색상 채우기 (레거시 호출)
+  if (typeof colorOrEarned === "string") {
+    ctx.fillStyle = colorOrEarned;
+    ctx.fill();
+    if (filledOrIndex) {
+      ctx.fillStyle = "rgba(255,255,255,0.2)";
+      ctx.beginPath();
+      ctx.arc(cx - size * 0.15, cy - size * 0.15, size * 0.25, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return;
+  }
+
+  // boolean이면 금색 그라데이션 별 (결과 화면)
+  if (colorOrEarned) {
+    // 금색 그라데이션 채우기
+    const grad = ctx.createLinearGradient(cx - size, cy - size, cx + size, cy + size);
+    grad.addColorStop(0, "#FFF8E1");
+    grad.addColorStop(0.25, "#FFD700");
+    grad.addColorStop(0.5, "#FFECB3");
+    grad.addColorStop(0.75, "#FFC107");
+    grad.addColorStop(1, "#FFF8E1");
+    ctx.fillStyle = grad;
+    ctx.fill();
+    // 테두리
+    ctx.strokeStyle = "rgba(180, 120, 0, 0.4)";
+    ctx.lineWidth = s(1.5);
+    ctx.stroke();
+    // 상단 광택 (볼록 느낌)
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = "rgba(255,255,255,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - size * 0.25, size * 0.5, size * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  } else {
+    // 미획득: 연한 크림톤 빈 별
+    ctx.fillStyle = "rgba(232, 224, 216, 0.3)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(200, 190, 170, 0.4)";
+    ctx.lineWidth = s(1);
+    ctx.stroke();
+  }
+}
+
+// ============================================================
+// 유틸: 둥근 사각형
+// ============================================================
+function roundRect(ctx, x, y, width, height, radius) {
+  if (width <= 0 || height <= 0) return;
+  radius = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.arcTo(x + width, y, x + width, y + radius, radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
+  ctx.lineTo(x + radius, y + height);
+  ctx.arcTo(x, y + height, x, y + height - radius, radius);
+  ctx.lineTo(x, y + radius);
+  ctx.arcTo(x, y, x + radius, y, radius);
+  ctx.closePath();
+}
+
+// ============================================================
+// 메인 루프
+// ============================================================
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // 최대 50ms 프레임
+  lastTime = timestamp;
+
+  update(dt);
+  updateCountdown(dt);
+  updateTimeup(dt);
+  updateResult(dt);
+  render();
+
+  requestAnimationFrame(gameLoop);
+}
+
+// 초기화
+resizeCanvas();
+requestAnimationFrame((timestamp) => {
+  lastTime = timestamp;
+  gameLoop(timestamp);
+});
+</script>
+</body>
+</html>
