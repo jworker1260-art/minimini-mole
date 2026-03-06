@@ -40,14 +40,25 @@ const CONFIG = {
   trapTargetDuration: 1.0,
   timingIndicatorDuration: 2.0,
 
-  // ===== 타겟 출현 비율 =====
-  basicSpawnRate: 0.6,
-  trapSpawnRate: 0.2,
-  timingSpawnRate: 0.2,
+  // ===== 슬라이드 타겟 =====
+  slideTargetDuration: 2.5,
+  slideSwipeThreshold: 30,
+  slideSwipeTimeLimit: 0.5,
+  scoreSlideSuccess: 200,
+  scoreSlideWrong: 0,
+  gaugeSlideSuccess: 120,
+  gaugeSlideWrong: 0,
+
+  // ===== 타겟 출현 비율 (4종) =====
+  basicSpawnRate: 0.50,
+  trapSpawnRate: 0.18,
+  timingSpawnRate: 0.17,
+  slideSpawnRate: 0.15,
 
   // ===== 타겟 첫 등장 가능 시간 (경과 초) =====
   trapFirstAppearTime: 5,
   timingFirstAppearTime: 10,
+  slideFirstAppearTime: 15,
 
   // ===== 난이도 구간 =====
   difficultyPhases: [
@@ -98,7 +109,7 @@ const CONFIG = {
   scoreFeverTap: 80,
 
   // ===== Fever 게이지 =====
-  feverGaugeMax: 1000,
+  feverGaugeMax: 1800,
   gaugeBasic: 100,
   gaugeTrapPenalty: 200,          // 함정 터치 시 게이지 감소량
   gaugeTrapFlashDuration: 0.2,  // 게이지 빨간 깜빡임 지속시간
@@ -153,7 +164,51 @@ const CONFIG = {
   shakeTimingE3Rot: 1, // ±1도 회전
   shakeFever: 1,       // Fever 피냐타: ±1px (0.04초)
   shakeFeverDur: 0.04,
+  hitStopSlide: 40,    // 슬라이드 성공 히트스톱 (ms)
+  shakeSlide: 1.5,     // 슬라이드 성공 흔들림
+  shakeSlideDur: 0.06,
   feverFlashDuration: 0.5,
+
+  // ===== 타겟별 사운드 (OscillatorNode 폴백용) =====
+  soundBasicHz: 1319,
+  soundBasicType: 'sine',
+  soundBasicDuration: 0.08,
+  soundTrapHz: 165,
+  soundTrapType: 'square',
+  soundTrapDuration: 0.1,
+  soundTimingE1Hz: 988,
+  soundTimingE2Hz: 1568,
+  soundTimingE3Hz: 2093,
+  soundTimingE3HarmonicHz: 3136,
+  soundTimingE3HarmonicGain: 0.25,
+  soundSlideSuccessHzStart: 1568,
+  soundSlideSuccessHzEnd: 2093,
+  soundSlideSuccessDuration: 0.10,
+  soundSlideSuccessType: 'sine',
+  soundSlideFailHz: 660,
+  soundSlideFailDuration: 0.04,
+  soundFeverHz: 1319,
+
+  // ===== 콤보 피치 =====
+  comboPitchEnabled: true,
+  comboPitchStep: 0.03,          // 콤보 1개당 피치 상승량
+  comboPitchMax: 1.5,            // 최대 피치 (기본 1.0)
+  comboPitchReset: true,         // 콤보 끊기면 즉시 리셋
+
+  // ===== 햅틱 =====
+  hapticEnabled: true,
+  hapticBasic: [30],               // 기본 히트: 30ms 단일 진동
+  hapticTrap: [50, 30, 50],        // 함정: 더블 펄스
+  hapticTimingE1: [20],            // E-1: 짧은 탭
+  hapticTimingE2: [40],            // E-2: 중간 탭
+  hapticTimingE3: [60],            // E-3: 강한 탭
+  hapticSlideSuccess: [20, 20, 40], // 슬라이드 성공: 쓱~탁
+  hapticSlideFail: [15],           // 슬라이드 실패: 미세한 탭
+  hapticFever: [15],               // Fever 연타: 아주 짧은 탭
+
+  // ===== 볼륨 =====
+  bgmVolume: 0.3,
+  sfxVolume: 0.8,
 
   // ===== 타임업 =====
   timeupDisplayDuration: 1.0,
@@ -234,6 +289,12 @@ const ASSETS = {
       colors: { main: "#FFD700", tear: "#64B5F6", face: "#333333" },
       shape: "diamond",
     },
+    slide: {
+      states: ["ready", "std", "pop"],
+      images: { ready: null, std: null, pop: null },
+      colors: { main: "#9B8EC7", arrow: "#FFFFFF" },
+      shape: "rounded_rect",
+    },
     fever: {
       states: ["ready", "std", "pop"],
       images: { ready: null, std: null, pop: null },
@@ -266,6 +327,7 @@ const ASSETS = {
     timingE3:    { colors: ["#FFD700", "#FFC107", "#FFAB00", "#FFFFFF", "#FFF8E1", "#FF6F00"], count: 48, shape: "star", sizeRange: [7, 14], speedRange: [180, 350], gravity: 200, spin: true },
     feverHit:    { colors: [THEME.gold, THEME.mint, THEME.cream, THEME.peach], count: 20, shape: "star",  sizeRange: [6, 10], speedRange: [140, 260], gravity: 350, spin: true },
     pinataHit:   { colors: ["#B5E8DF", "#FFE4C4", "#FFB5A7", "#7ECEC0", "#FFF8F0", "#FFD700"], count: 10, shape: "mixed", sizeRange: [6, 10], speedRange: [130, 260], gravity: 320, spin: true },
+    slideHit:    { colors: ["#9B8EC7", "#B5A8D8", "#D4CCE8", "#FFE4C4"], count: 16, shape: "star", sizeRange: [5, 9], speedRange: [120, 240], gravity: 320, spin: true },
     pinataBurst: { colors: ["#B5E8DF", "#FFE4C4", "#FFB5A7", "#7ECEC0", "#FFF8F0", "#FFD700", "#F0FAF7", "#5BA89C"], count: 39, shape: "mixed", sizeRange: [7, 14], speedRange: [200, 420], gravity: 160, spin: true },
   },
   timeup: {
@@ -289,6 +351,8 @@ const ASSETS = {
     timingE2:  { text: "Good! +200",     color: THEME.gold },
     timingE3:  { text: "Perfect! +500",  color: THEME.gold, scale: 1.3 },
     feverTap:  { text: "+80",            color: THEME.gold, scale: 0.8, fadeSpeed: 1.5 },
+    slideSuccess: { text: "+200",       color: "#9B8EC7", scale: 1.1 },
+    slideMiss:    { text: "Miss",       color: THEME.textSecondary, scale: 0.9 },
   },
   // 사운드 에셋 경로 — null이면 OscillatorNode 폴백
   // 파일 준비 시: 'sounds/hit_basic.mp3' 형태로 경로 지정
@@ -309,6 +373,8 @@ const ASSETS = {
     sfxTimeUp: null,
     sfxPinataHit: null,
     sfxPinataExplode: null,
+    sfxSlideSuccess: null,
+    sfxSlideFail: null,
   },
 };
 
@@ -317,30 +383,29 @@ const ASSETS = {
 // 각 사운드는 notes 배열로 구성. 각 note: {freq, end?, type, delay?, vol?, duration}
 // ============================================================
 const SOUNDS = {
-  // 기본 히트: 높은 톤 짧은 "뾱" (주파수 살짝 하강)
+  // 기본 히트: 크리스탈 "딩!" (E6 + 옥타브 배음)
   basicHit: { notes: [
-    { freq: 880, end: 660, type: "sine", duration: 0.08, vol: 0.18 },
-    { freq: 1320, type: "sine", duration: 0.05, vol: 0.06 }, // 배음
+    { freq: 1319, type: "sine", duration: 0.08, vol: 0.18 },
+    { freq: 2638, type: "sine", duration: 0.06, vol: 0.036 }, // 옥타브 위 배음 (0.2x)
   ]},
-  // 함정 히트: 낮은 버저 "삐잉" (톱니파 + 하강)
+  // 함정 히트: 낮고 거친 "부웅" (E3, square파)
   trapHit: { notes: [
-    { freq: 250, end: 120, type: "sawtooth", duration: 0.2, vol: 0.13 },
-    { freq: 180, end: 80,  type: "square",   duration: 0.15, vol: 0.06 },
+    { freq: 165, type: "square", duration: 0.1, vol: 0.14 },
   ]},
-  // 타이밍 E-1: 낮고 짧은 음
+  // 타이밍 E-1: 심심한 "딩" (B5, 배음 없음)
   timingE1: { notes: [
-    { freq: 523, type: "sine", duration: 0.1, vol: 0.15 },
+    { freq: 988, type: "sine", duration: 0.08, vol: 0.15 },
   ]},
-  // 타이밍 E-2: 중간 음 + 하모닉
+  // 타이밍 E-2: 밝은 "띵!" (G6 + 옥타브 배음)
   timingE2: { notes: [
-    { freq: 784, type: "sine", duration: 0.12, vol: 0.16 },
-    { freq: 1046, type: "sine", duration: 0.08, vol: 0.06, delay: 0.03 },
+    { freq: 1568, type: "sine", duration: 0.08, vol: 0.16 },
+    { freq: 3136, type: "sine", duration: 0.06, vol: 0.024 }, // 옥타브 위 배음 (0.15x)
   ]},
-  // 타이밍 E-3: 높고 맑은 화음 "딩!"
+  // 타이밍 E-3: 화려한 "찡~!" (C7 + 5도 G7 + 옥타브 C8)
   timingE3: { notes: [
-    { freq: 1046, type: "sine",     duration: 0.18, vol: 0.17 },
-    { freq: 1318, type: "sine",     duration: 0.15, vol: 0.10, delay: 0.02 },
-    { freq: 1568, type: "triangle", duration: 0.12, vol: 0.06, delay: 0.04 },
+    { freq: 2093, type: "sine", duration: 0.12, vol: 0.17 },
+    { freq: 3136, type: "sine", duration: 0.10, vol: 0.0425 }, // 5도 위 배음 (0.25x)
+    { freq: 4186, type: "sine", duration: 0.08, vol: 0.017 },  // 옥타브 위 배음 (0.1x)
   ]},
   // Fever 발동: 상승 팡파레 (도미솔도 아르페지오)
   feverStart: { notes: [
@@ -350,9 +415,9 @@ const SOUNDS = {
     { freq: 1046, type: "square",   duration: 0.25, vol: 0.30, delay: 0.24 },
     { freq: 1046, type: "triangle", duration: 0.30, vol: 0.15, delay: 0.24 },
   ]},
-  // Fever 중 터치: 가볍고 빠른 "팝"
+  // Fever 중 터치: 짧은 크리스탈 "딩" (E6, 연타 시 딩딩딩딩)
   feverTap: { notes: [
-    { freq: 740, end: 600, type: "sine", duration: 0.06, vol: 0.22 },
+    { freq: 1319, type: "sine", duration: 0.06, vol: 0.22 },
   ]},
   // Fever 종료: 하강 음
   feverEnd: { notes: [
@@ -392,6 +457,15 @@ const SOUNDS = {
   countdownGo: { notes: [
     { freq: 880, type: "sine",     duration: 0.15, vol: 0.20 },
     { freq: 1320, type: "triangle", duration: 0.12, vol: 0.08, delay: 0.02 },
+  ]},
+  // 슬라이드 성공: 크리스탈 글라이드 "슝~띵!" (G6→C7 + 옥타브 배음)
+  slideSuccess: { notes: [
+    { freq: 1568, end: 2093, type: "sine", duration: 0.10, vol: 0.20 },
+    { freq: 3136, end: 4186, type: "sine", duration: 0.10, vol: 0.04 }, // 옥타브 위 배음 글라이드
+  ]},
+  // 슬라이드 실패: 짧고 조용한 "뚝" (E5)
+  slideFail: { notes: [
+    { freq: 660, type: "sine", duration: 0.04, vol: 0.06 },
   ]},
 };
 
@@ -554,6 +628,12 @@ let screenShake = { active: false, timer: 0, intensity: 0, duration: 0.3, rotati
 let hitStopUntil = 0; // 히트스톱: Date.now() 기준 정지 해제 시각
 let hitFlashes = [];  // 히트 플래시 이펙트 배열
 
+// 슬라이드 터치 대기 (스와이프 판정용)
+let pendingSlideTouch = null;
+
+// 콤보 카운터 (피치 변화용)
+let comboCount = 0; // { startX, startY, startTime, cellIndex, targetIndex, touchId }
+
 // 카운트다운
 let countdownNumber = 3; // 3, 2, 1
 let countdownTimer = 0;
@@ -682,6 +762,8 @@ const SFX_KEY_MAP = {
   countdownGo: "sfxCountdownGo",
   pinataHit: "sfxPinataHit",
   pinataExplode: "sfxPinataExplode",
+  slideSuccess: "sfxSlideSuccess",
+  slideFail: "sfxSlideFail",
 };
 
 // BGM 타입 → ASSETS.sounds 키 매핑
@@ -700,8 +782,8 @@ let bgmAudio = null;       // 현재 재생 중인 BGM Audio 엘리먼트
 let bgmAudioKey = null;    // 현재 BGM 키
 let bgmFadeInterval = null; // 크로스페이드 인터벌
 
-let sfxVolume = 1.0;
-let bgmVolume = 1.0;
+let sfxVolume = CONFIG.sfxVolume;
+let bgmVolume = CONFIG.bgmVolume;
 
 let audioInitialized = false;
 function initAudio() {
@@ -739,6 +821,17 @@ function preloadAllAudio() {
 }
 
 // SFX 재생: 파일이 있으면 Audio, 없으면 OscillatorNode 폴백
+function triggerHaptic(pattern) {
+  if (CONFIG.hapticEnabled && navigator.vibrate) {
+    navigator.vibrate(pattern);
+  }
+}
+
+function getComboPitch() {
+  if (!CONFIG.comboPitchEnabled) return 1.0;
+  return Math.min(1.0 + comboCount * CONFIG.comboPitchStep, CONFIG.comboPitchMax);
+}
+
 function playSound(soundKey) {
   const assetKey = SFX_KEY_MAP[soundKey];
   const filePath = assetKey ? ASSETS.sounds[assetKey] : null;
@@ -768,6 +861,7 @@ function playSFXFile(assetKey) {
   if (!source) return;
   const clone = source.cloneNode();
   clone.volume = sfxVolume;
+  clone.playbackRate = getComboPitch();
   clone.play().catch(() => {});
   sfxPool.push({ audio: clone, key: assetKey, startTime: now });
 }
@@ -779,6 +873,7 @@ function playSFXOscillator(soundKey) {
   if (!def || !def.notes) return;
 
   const now = audioCtx.currentTime;
+  const pitch = getComboPitch();
   for (const note of def.notes) {
     const startTime = now + (note.delay || 0);
     const osc = audioCtx.createOscillator();
@@ -786,9 +881,9 @@ function playSFXOscillator(soundKey) {
     osc.connect(gain);
     gain.connect(audioCtx.destination);
     osc.type = note.type || "sine";
-    osc.frequency.setValueAtTime(note.freq, startTime);
+    osc.frequency.setValueAtTime(note.freq * pitch, startTime);
     if (note.end) {
-      osc.frequency.exponentialRampToValueAtTime(note.end, startTime + note.duration);
+      osc.frequency.exponentialRampToValueAtTime(note.end * pitch, startTime + note.duration);
     }
     const vol = (note.vol || 0.15) * sfxVolume;
     gain.gain.setValueAtTime(vol, startTime);
@@ -1100,17 +1195,20 @@ function chooseTargetType() {
   const elapsed = CONFIG.stageTimeLimit - timeRemaining;
   const trapOk = elapsed >= CONFIG.trapFirstAppearTime;
   const timingOk = elapsed >= CONFIG.timingFirstAppearTime;
+  const slideOk = elapsed >= CONFIG.slideFirstAppearTime;
 
   // 아직 해금 안 된 타입의 비율을 기본 타겟에 합산
   let bRate = CONFIG.basicSpawnRate;
   let tRate = trapOk ? CONFIG.trapSpawnRate : 0;
   let mRate = timingOk ? CONFIG.timingSpawnRate : 0;
-  const total = bRate + tRate + mRate;
+  let sRate = slideOk ? CONFIG.slideSpawnRate : 0;
+  const total = bRate + tRate + mRate + sRate;
 
   const r = Math.random() * total;
   if (r < bRate) return "basic";
   if (r < bRate + tRate) return "trap";
-  return timingOk ? "timing" : "basic";
+  if (r < bRate + tRate + mRate) return timingOk ? "timing" : "basic";
+  return slideOk ? "slide" : "basic";
 }
 
 function spawnTarget() {
@@ -1138,7 +1236,10 @@ function spawnTarget() {
     maxDuration: type === "basic" ? CONFIG.basicTargetDuration
                : type === "trap" ? CONFIG.trapTargetDuration
                : type === "timing" ? CONFIG.timingIndicatorDuration
+               : type === "slide" ? CONFIG.slideTargetDuration
                : CONFIG.basicTargetDuration,
+    // 슬라이드 방향 (0=up, 1=right, 2=down, 3=left)
+    slideDirection: type === "slide" ? Math.floor(Math.random() * 4) : -1,
     // 타이밍 인디케이터
     indicatorScale: 1.0,
     _stillMode: false,    // E-3 멈춤 모드
@@ -1198,6 +1299,8 @@ function spawnHitFlash(x, y, type) {
   const baseRadius = gridLayout.cellSize * 0.35;
   if (type === "timingE3") {
     hitFlashes.push({ x, y, timer: 0, duration: 0.15, startAlpha: 0.7, alpha: 0.7, startRadius: baseRadius * 1.8 * scaleRatio, radius: baseRadius * 1.8 * scaleRatio, color: "#FFD700", startLineWidth: 5 * scaleRatio, lineWidth: 5 * scaleRatio });
+  } else if (type === "slide") {
+    hitFlashes.push({ x, y, timer: 0, duration: 0.12, startAlpha: 0.6, alpha: 0.6, startRadius: baseRadius * 1.6 * scaleRatio, radius: baseRadius * 1.6 * scaleRatio, color: "#9B8EC7", startLineWidth: 4 * scaleRatio, lineWidth: 4 * scaleRatio });
   } else {
     hitFlashes.push({ x, y, timer: 0, duration: 0.10, startAlpha: 0.6, alpha: 0.6, startRadius: baseRadius * 1.5 * scaleRatio, radius: baseRadius * 1.5 * scaleRatio, color: THEME.mint, startLineWidth: 3.5 * scaleRatio, lineWidth: 3.5 * scaleRatio });
   }
@@ -1468,7 +1571,9 @@ function handlePlayingInput(x, y) {
     const dy = y - pinataY;
     spawnParticles(pinataX + dx * 0.2, pinataY + dy * 0.2, "pinataHit");
     spawnFloatingText(x, y, "feverTap");
+    comboCount++;
     playSound("feverTap");
+    triggerHaptic(CONFIG.hapticFever);
     return;
   }
 
@@ -1499,7 +1604,9 @@ function handlePlayingInput(x, y) {
         spawnParticles(cell.centerX, cell.centerY, "basicHit");
         spawnHitFlash(cell.centerX, cell.centerY, "basic");
         spawnFloatingText(cell.centerX, cell.centerY, "basic");
+        comboCount++;
         playSound("basicHit");
+        triggerHaptic(CONFIG.hapticBasic);
       } else if (t.type === "trap") {
         score += CONFIG.scoreTrap;
         if (score < 0) score = 0;
@@ -1518,7 +1625,9 @@ function handlePlayingInput(x, y) {
         spawnParticles(cell.centerX, cell.centerY, "trapHit");
         spawnHitFlash(cell.centerX, cell.centerY, "trap");
         spawnFloatingText(cell.centerX, cell.centerY, "trap");
+        comboCount = 0;
         playSound("trapHit");
+        triggerHaptic(CONFIG.hapticTrap);
       } else if (t.type === "timing") {
         const indicatorScale = t.indicatorScale;
         let scoreVal, gaugeVal, textKey, soundKey;
@@ -1562,7 +1671,20 @@ function handlePlayingInput(x, y) {
         spawnParticles(cell.centerX, cell.centerY, textKey); // E등급별 파티클
         spawnHitFlash(cell.centerX, cell.centerY, textKey);
         spawnFloatingText(cell.centerX, cell.centerY, textKey);
+        comboCount++;
         playSound(soundKey);
+        triggerHaptic(textKey === "timingE3" ? CONFIG.hapticTimingE3
+                    : textKey === "timingE2" ? CONFIG.hapticTimingE2
+                    : CONFIG.hapticTimingE1);
+      } else if (t.type === "slide") {
+        // 슬라이드: 터치 시작만 기록, 스와이프 완료 시 판정
+        pendingSlideTouch = {
+          startX: x, startY: y,
+          startTime: Date.now(),
+          cellIndex: t.cellIndex,
+          targetIndex: i,
+        };
+        return; // 게이지 체크 불필요 (스와이프 완료 시 처리)
       }
 
       // Fever 게이지 체크
@@ -1578,9 +1700,110 @@ function handlePlayingInput(x, y) {
   }
 }
 
-canvas.addEventListener("click", (e) => {
+// 슬라이드 스와이프 판정
+function handleSlideEnd(endX, endY) {
+  if (!pendingSlideTouch) return;
+  const p = pendingSlideTouch;
+  pendingSlideTouch = null;
+
+  // 시간 초과 체크
+  if (Date.now() - p.startTime > CONFIG.slideSwipeTimeLimit * 1000) return;
+
+  // 해당 타겟이 아직 유효한지 확인
+  const t = targets.find(t => t.cellIndex === p.cellIndex && t.type === "slide" && t.state !== "pop" && t.state !== "despawning");
+  if (!t) return;
+
+  const dx = endX - p.startX;
+  const dy = endY - p.startY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  const cell = gridLayout.cells[t.cellIndex];
+
+  if (dist < CONFIG.slideSwipeThreshold * scaleRatio) {
+    // 스와이프 거리 부족 → Miss
+    handleSlideMiss(t, cell);
+    return;
+  }
+
+  // 스와이프 방향 판정 (0=up, 1=right, 2=down, 3=left)
+  let swipeDir;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    swipeDir = dx > 0 ? 1 : 3;
+  } else {
+    swipeDir = dy > 0 ? 2 : 0;
+  }
+
+  if (swipeDir === t.slideDirection) {
+    handleSlideSuccess(t, cell);
+  } else {
+    handleSlideMiss(t, cell);
+  }
+}
+
+function handleSlideSuccess(t, cell) {
+  score += CONFIG.scoreSlideSuccess;
+  feverGauge = clamp(feverGauge + CONFIG.gaugeSlideSuccess, 0, CONFIG.feverGaugeMax);
+  t.state = "pop";
+  t.stateTimer = 0;
+  t.scale = 1.0;
+
+  // 방향에 따른 Squash & Stretch
+  const dir = t.slideDirection;
+  if (dir === 0 || dir === 2) { t.scaleX = 0.7; t.scaleY = 1.4; }
+  else { t.scaleX = 1.4; t.scaleY = 0.7; }
+
+  hitStopUntil = Date.now() + CONFIG.hitStopSlide;
+  screenShake.active = true;
+  screenShake.timer = CONFIG.shakeSlideDur;
+  screenShake.duration = CONFIG.shakeSlideDur;
+  screenShake.intensity = CONFIG.shakeSlide * scaleRatio;
+  screenShake.rotationDeg = 0;
+  spawnParticles(cell.centerX, cell.centerY, "slideHit");
+  spawnHitFlash(cell.centerX, cell.centerY, "slide");
+  spawnFloatingText(cell.centerX, cell.centerY, "slideSuccess");
+  comboCount++;
+  playSound("slideSuccess");
+  triggerHaptic(CONFIG.hapticSlideSuccess);
+
+  // Fever 게이지 체크
+  if (!isFever && !feverIntro && feverGauge >= CONFIG.feverGaugeMax) {
+    feverIntro = true;
+    feverIntroTimer = 0;
+    playSound("feverStart");
+    startFever();
+  }
+}
+
+function handleSlideMiss(t, cell) {
+  score += CONFIG.scoreSlideWrong;
+  feverGauge = clamp(feverGauge + CONFIG.gaugeSlideWrong, 0, CONFIG.feverGaugeMax);
+  t.state = "pop";
+  t.stateTimer = 0;
+  t.scale = 1.0;
+  t.hitRotation = (Math.random() - 0.5) * 0.3;
+  screenShake.active = true;
+  screenShake.timer = 0.2;
+  screenShake.duration = 0.2;
+  screenShake.intensity = 3 * scaleRatio;
+  screenShake.rotationDeg = 0;
+  spawnFloatingText(cell.centerX, cell.centerY, "slideMiss");
+  comboCount = 0;
+  playSound("slideFail");
+  triggerHaptic(CONFIG.hapticSlideFail);
+}
+
+// 마우스 입력 (슬라이드 대응: mousedown/mouseup)
+let mouseDownPos = null;
+canvas.addEventListener("mousedown", (e) => {
   const pos = getCanvasPos(e.clientX, e.clientY);
+  mouseDownPos = pos;
   handleInput(pos.x, pos.y);
+});
+canvas.addEventListener("mouseup", (e) => {
+  if (!pendingSlideTouch || !mouseDownPos) { mouseDownPos = null; return; }
+  const pos = getCanvasPos(e.clientX, e.clientY);
+  handleSlideEnd(pos.x, pos.y);
+  mouseDownPos = null;
 });
 
 canvas.addEventListener("touchstart", (e) => {
@@ -1588,6 +1811,21 @@ canvas.addEventListener("touchstart", (e) => {
   for (const touch of e.changedTouches) {
     const pos = getCanvasPos(touch.clientX, touch.clientY);
     handleInput(pos.x, pos.y);
+    if (pendingSlideTouch) {
+      pendingSlideTouch.touchId = touch.identifier;
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchend", (e) => {
+  e.preventDefault();
+  if (!pendingSlideTouch) return;
+  for (const touch of e.changedTouches) {
+    if (pendingSlideTouch && touch.identifier === pendingSlideTouch.touchId) {
+      const pos = getCanvasPos(touch.clientX, touch.clientY);
+      handleSlideEnd(pos.x, pos.y);
+      break;
+    }
   }
 }, { passive: false });
 
@@ -1622,6 +1860,8 @@ function startCountdown() {
   feverPopTimer = 0;
   feverIntro = false;
   feverIntroTimer = 0;
+  pendingSlideTouch = null;
+  comboCount = 0;
   initBgSparkles();
 
   gameState = "countdown";
@@ -1689,6 +1929,7 @@ function triggerTimeup() {
   feverIntro = false;
   feverPopPhase = false;
   pinataScale = 0;
+  pendingSlideTouch = null;
   stopBGM();
   playSound("timeup");
 }
@@ -1961,6 +2202,7 @@ function update(dt) {
             // 미스: 패널티 없이 사라짐
             t.state = "despawning";
             t.stateTimer = 0;
+            comboCount = 0;
             const cell = gridLayout.cells[t.cellIndex];
             spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
           }
@@ -1969,6 +2211,7 @@ function update(dt) {
         if (!t._stillMode && t.indicatorScale <= 0) {
           t.state = "despawning";
           t.stateTimer = 0;
+          comboCount = 0;
           const cell = gridLayout.cells[t.cellIndex];
           spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
         }
@@ -1978,6 +2221,7 @@ function update(dt) {
       if (t.type !== "timing" && t.lifeTimer >= t.maxDuration) {
         t.state = "despawning";
         t.stateTimer = 0;
+        comboCount = 0;
         const cell = gridLayout.cells[t.cellIndex];
         spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
       }
@@ -2433,9 +2677,9 @@ function renderTutorial() {
   ctx.font = `bold ${s(28)}px ${FONT.text}`;
   ctx.fillText("How to Play", canvasWidth / 2, canvasHeight * 0.1);
 
-  const startY = canvasHeight * 0.2;
-  const spacing = canvasHeight * 0.2;
-  const iconSize = s(40);
+  const startY = canvasHeight * 0.17;
+  const spacing = canvasHeight * 0.16;
+  const iconSize = s(38);
 
   // 기본 타겟
   drawBasicTargetIcon(canvasWidth * 0.2, startY, iconSize);
@@ -2466,6 +2710,16 @@ function renderTutorial() {
   ctx.fillStyle = THEME.gold;
   ctx.font = `${s(13)}px ${FONT.text}`;
   ctx.fillText(`최대 +${CONFIG.scoreTimingE3}점`, canvasWidth * 0.35, startY + spacing * 2 + s(22));
+
+  // 슬라이드 타겟
+  drawSlideTargetIcon(canvasWidth * 0.2, startY + spacing * 3, iconSize);
+  ctx.fillStyle = THEME.textPrimary;
+  ctx.font = `${s(16)}px ${FONT.text}`;
+  ctx.textAlign = "left";
+  ctx.fillText("화살표 방향으로 밀어!", canvasWidth * 0.35, startY + spacing * 3);
+  ctx.fillStyle = "#9B8EC7";
+  ctx.font = `${s(13)}px ${FONT.text}`;
+  ctx.fillText(`+${CONFIG.scoreSlideSuccess}점`, canvasWidth * 0.35, startY + spacing * 3 + s(22));
 
   // Tap to Start
   ctx.textAlign = "center";
@@ -2933,6 +3187,7 @@ function renderTargets() {
         case "trap": drawTrapTarget(drawSize, t); break;
         case "timing": drawTimingTarget(drawSize, t, cx, cy); break;
         case "fever": drawFeverTarget(drawSize, t); break;
+        case "slide": drawSlideTarget(drawSize, t); break;
       }
     }
 
@@ -3253,6 +3508,13 @@ function drawTimingTargetIcon(x, y, size) {
   else if (mode === 'C') drawTimingIndicatorC(x, y, size / 2, 0.6, { indicatorScale: 0.6 });
 }
 
+function drawSlideTargetIcon(x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  drawSlideTarget(size / 2, { state: "std", slideDirection: 1 });
+  ctx.restore();
+}
+
 // -- 타이밍 인디케이터 모드 A: Approach Circle (osu! 개선형) --
 function drawTimingIndicatorA(cx, cy, baseSize, indicatorScale) {
   if (indicatorScale <= 0) return;
@@ -3455,6 +3717,62 @@ function drawFeverTarget(size, target) {
   ctx.quadraticCurveTo(-size * 0.1, size * 0.3, 0, size * 0.15);
   ctx.quadraticCurveTo(size * 0.1, size * 0.3, size * 0.2, size * 0.15);
   ctx.stroke();
+}
+
+// -- 슬라이드 타겟 (둥근 사각형 + 방향 화살표) --
+function drawSlideTarget(size, target) {
+  const colors = ASSETS.targets.slide.colors;
+  const r = size * 0.3; // 모서리 반지름
+
+  // 둥근 사각형 몸체
+  ctx.beginPath();
+  ctx.moveTo(-size + r, -size);
+  ctx.lineTo(size - r, -size);
+  ctx.quadraticCurveTo(size, -size, size, -size + r);
+  ctx.lineTo(size, size - r);
+  ctx.quadraticCurveTo(size, size, size - r, size);
+  ctx.lineTo(-size + r, size);
+  ctx.quadraticCurveTo(-size, size, -size, size - r);
+  ctx.lineTo(-size, -size + r);
+  ctx.quadraticCurveTo(-size, -size, -size + r, -size);
+  ctx.closePath();
+  ctx.fillStyle = colors.main;
+  ctx.fill();
+
+  // 화살표 발광
+  ctx.save();
+  ctx.shadowColor = colors.arrow;
+  ctx.shadowBlur = 8 * scaleRatio;
+
+  // 방향 회전 (0=up, 1=right, 2=down, 3=left)
+  const dir = target.slideDirection;
+  ctx.rotate(dir * Math.PI / 2);
+
+  // 화살표 (위쪽 방향 기준으로 그림)
+  const arrowSize = size * 0.55;
+  ctx.beginPath();
+  ctx.moveTo(0, -arrowSize);
+  ctx.lineTo(arrowSize * 0.6, arrowSize * 0.1);
+  ctx.lineTo(arrowSize * 0.2, arrowSize * 0.1);
+  ctx.lineTo(arrowSize * 0.2, arrowSize * 0.6);
+  ctx.lineTo(-arrowSize * 0.2, arrowSize * 0.6);
+  ctx.lineTo(-arrowSize * 0.2, arrowSize * 0.1);
+  ctx.lineTo(-arrowSize * 0.6, arrowSize * 0.1);
+  ctx.closePath();
+  ctx.fillStyle = colors.arrow;
+  ctx.fill();
+
+  ctx.restore();
+
+  // 눈 (작은 점 두 개 — 화살표 아래에)
+  const eyeOffset = size * 0.25;
+  const eyeY = size * 0.55;
+  const eyeR = size * 0.08;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.beginPath();
+  ctx.arc(-eyeOffset, eyeY, eyeR, 0, Math.PI * 2);
+  ctx.arc(eyeOffset, eyeY, eyeR, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 // -- 피냐타 캐릭터 --
