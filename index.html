@@ -57,14 +57,18 @@ const CONFIG = {
 
   // ===== 타겟 첫 등장 가능 시간 (경과 초) =====
   trapFirstAppearTime: 5,
-  timingFirstAppearTime: 10,
-  slideFirstAppearTime: 15,
+  timingFirstAppearTime: 5,
+  slideFirstAppearTime: 10,
 
   // ===== 난이도 구간 =====
   difficultyPhases: [
-    { startTime: 0,  endTime: 15, spawnInterval: [1.0, 1.3], maxSimultaneous: 3 },
-    { startTime: 15, endTime: 25, spawnInterval: [0.7, 1.0], maxSimultaneous: 4 },
-    { startTime: 25, endTime: 30, spawnInterval: [0.5, 0.8], maxSimultaneous: 5 },
+    { startTime: 0,  endTime: 5,  spawnInterval: [1.2, 1.5], maxSimultaneous: 2 },
+    { startTime: 5,  endTime: 10, spawnInterval: [1.0, 1.3], maxSimultaneous: 3 },
+    { startTime: 10, endTime: 15, spawnInterval: [0.8, 1.1], maxSimultaneous: 3 },
+    { startTime: 15, endTime: 20, spawnInterval: [0.7, 0.9], maxSimultaneous: 4 },
+    { startTime: 20, endTime: 23, spawnInterval: [0.5, 0.8], maxSimultaneous: 5 },
+    { startTime: 23, endTime: 26, spawnInterval: [0.4, 0.7], maxSimultaneous: 6 },
+    { startTime: 26, endTime: 30, spawnInterval: [0.3, 0.6], maxSimultaneous: 7 },
   ],
 
   // ===== 타이밍 판정 =====
@@ -213,6 +217,32 @@ const CONFIG = {
   // ===== 타임업 =====
   timeupDisplayDuration: 1.0,
 
+  // ===== UI 디자인 =====
+  uiCornerRadius: 16,
+  uiPanelAlpha: 0.85,
+  uiShadowBlur: 12,
+  uiShadowOffsetY: 4,
+  uiShadowColor: 'rgba(0,0,0,0.08)',
+  uiButtonCornerRadius: 25,
+  uiButtonShadowBlur: 8,
+  titleTagline: '터치! 터치! 두더지를 잡아라!',
+
+  // ===== 플레이 배경 색상 순환 =====
+  bgCycleColors: [
+    { time: 0,  color: '#FFF8F0' },  // 크림
+    { time: 15, color: '#F0FAF7' },  // 연한 민트
+    { time: 25, color: '#FFF0ED' },  // 연한 피치
+    { time: 30, color: '#FFE8E5' },  // 연한 코랄
+  ],
+  bgHitPulseDuration: 0.15,
+  bgHitPulseAlpha: 0.03,
+  bgHitPulseCombo10: 0.05,
+  bgHitPulseCombo20: 0.07,
+
+  // ===== 마지막 구간 최소 타겟 수 =====
+  lastPhaseMinTargets: 4,
+  lastPhaseMinTargetsStart: 23,
+
   // ===== 플로팅 텍스트 =====
   floatingTextDuration: 0.7,
   floatingTextRiseDistance: 50,
@@ -270,6 +300,9 @@ const THEME = {
 // ASSETS - 비주얼 에셋 집중 관리
 // ============================================================
 const ASSETS = {
+  images: {
+    titleLogo: null, // null이면 텍스트 렌더링, 경로 지정 시 이미지 표시
+  },
   targets: {
     basic: {
       states: ["ready", "std", "pop"],
@@ -623,6 +656,11 @@ let floatingTexts = [];
 // 리플 이펙트
 let ripples = [];
 
+// 젤리 링 이펙트 (히트 시 확장 링)
+let jellyRings = [];
+// 젤리 셀 복귀 바운스 (히트 후 빈 칸 다시 나타날 때)
+let jellyCellBounce = {}; // { cellIndex: { timer, duration } }
+
 // 화면 흔들림
 let screenShake = { active: false, timer: 0, intensity: 0, duration: 0.3, rotationDeg: 0 };
 let hitStopUntil = 0; // 히트스톱: Date.now() 기준 정지 해제 시각
@@ -632,7 +670,10 @@ let hitFlashes = [];  // 히트 플래시 이펙트 배열
 let pendingSlideTouch = null;
 
 // 콤보 카운터 (피치 변화용)
-let comboCount = 0; // { startX, startY, startTime, cellIndex, targetIndex, touchId }
+let comboCount = 0;
+
+// 배경 밝기 펄스 (히트 시)
+let bgHitPulse = 0; // 남은 시간 (0.15초에서 감소)
 
 // 카운트다운
 let countdownNumber = 3; // 3, 2, 1
@@ -738,8 +779,117 @@ function easeOutQuad(t) {
   return 1 - (1 - t) * (1 - t);
 }
 
+function hexToRgb(hex) {
+  const v = parseInt(hex.slice(1), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+function lerpColor(hex1, hex2, t) {
+  const [r1, g1, b1] = hexToRgb(hex1);
+  const [r2, g2, b2] = hexToRgb(hex2);
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return `rgb(${r},${g},${b})`;
+}
+
+function getPlayingBgColor(elapsed) {
+  const stops = CONFIG.bgCycleColors;
+  if (elapsed <= stops[0].time) return stops[0].color;
+  for (let i = 1; i < stops.length; i++) {
+    if (elapsed <= stops[i].time) {
+      const t = (elapsed - stops[i - 1].time) / (stops[i].time - stops[i - 1].time);
+      return lerpColor(stops[i - 1].color, stops[i].color, t);
+    }
+  }
+  return stops[stops.length - 1].color;
+}
+
 function s(val) {
   return val * scaleRatio;
+}
+
+// ============================================================
+// UI 유틸리티 함수
+// ============================================================
+function drawRoundedRect(x, y, w, h, r) {
+  const cr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + cr, y);
+  ctx.lineTo(x + w - cr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + cr);
+  ctx.lineTo(x + w, y + h - cr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - cr, y + h);
+  ctx.lineTo(x + cr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - cr);
+  ctx.lineTo(x, y + cr);
+  ctx.quadraticCurveTo(x, y, x + cr, y);
+  ctx.closePath();
+}
+
+function drawPanel(x, y, w, h, opts = {}) {
+  const cr = opts.cornerRadius ?? s(CONFIG.uiCornerRadius);
+  const fill = opts.fillColor ?? `rgba(255,255,255,${CONFIG.uiPanelAlpha})`;
+  const shadow = opts.shadow !== false;
+  ctx.save();
+  if (shadow) {
+    ctx.shadowColor = opts.shadowColor ?? CONFIG.uiShadowColor;
+    ctx.shadowBlur = opts.shadowBlur ?? s(CONFIG.uiShadowBlur);
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = opts.shadowOffsetY ?? s(CONFIG.uiShadowOffsetY);
+  }
+  drawRoundedRect(x, y, w, h, cr);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  // 테두리
+  if (opts.border !== false) {
+    ctx.strokeStyle = opts.borderColor ?? 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = opts.borderWidth ?? 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawPillButton(x, y, w, h, text, opts = {}) {
+  const cr = h / 2;
+  const fill = opts.fillColor ?? THEME.buttonPrimary;
+  const textColor = opts.textColor ?? THEME.textLight;
+  const fontSize = opts.fontSize ?? s(18);
+  const fontFace = opts.fontFace ?? FONT.text;
+  ctx.save();
+  // 그림자
+  ctx.shadowColor = CONFIG.uiShadowColor;
+  ctx.shadowBlur = s(CONFIG.uiButtonShadowBlur);
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = s(2);
+  drawRoundedRect(x, y, w, h, cr);
+  if (opts.outline) {
+    ctx.strokeStyle = fill;
+    ctx.lineWidth = s(2);
+    ctx.stroke();
+    ctx.shadowColor = 'transparent';
+  } else {
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    // 상단 하이라이트
+    if (opts.highlight !== false) {
+      ctx.save();
+      ctx.clip();
+      drawRoundedRect(x, y, w, h * 0.45, cr);
+      ctx.fillStyle = 'rgba(255,255,255,0.2)';
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  // 텍스트
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = opts.outline ? (opts.textColor ?? fill) : textColor;
+  ctx.font = `bold ${fontSize}px ${fontFace}`;
+  ctx.fillText(text, x + w / 2, y + h / 2);
+  ctx.restore();
 }
 
 // ============================================================
@@ -1370,6 +1520,25 @@ function spawnRipple(x, y) {
   });
 }
 
+function spawnJellyRing(cellIndex, targetType) {
+  const cell = gridLayout.cells[cellIndex];
+  const startR = gridLayout.cellSize * 0.38;
+  const jc = getJellyColors(targetType);
+  jellyRings.push({
+    x: cell.centerX, y: cell.centerY,
+    startRadius: startR,
+    endRadius: startR * 1.5,
+    radius: startR,
+    startAlpha: 0.3,
+    alpha: 0.3,
+    color: jc.border,
+    timer: 0,
+    duration: 0.2,
+  });
+  // 히트 후 빈 칸 젤리 복귀 바운스
+  jellyCellBounce[cellIndex] = { timer: 0, duration: 0.3 };
+}
+
 // ============================================================
 // 터치/클릭 입력 처리
 // ============================================================
@@ -1464,18 +1633,18 @@ function handleInput(x, y) {
   initAudio();
 
   if (gameState === "title") {
-    const btnW = s(200);
-    const btnH = s(52);
+    const btnW = s(220);
+    const btnH = s(50);
     const btnGap = s(14);
     const btnX = canvasWidth / 2 - btnW / 2;
-    const btnStartY = canvasHeight * 0.58;
-    // Start 버튼
+    const btnStartY = canvasHeight * 0.62;
+    // 시작하기 버튼
     if (hitTest(x, y, btnX, btnStartY, btnW, btnH)) {
       setBtnPressed("title_start");
       startTutorial();
       return;
     }
-    // Score 버튼
+    // 기록 보기 버튼
     if (hitTest(x, y, btnX, btnStartY + btnH + btnGap, btnW, btnH)) {
       setBtnPressed("title_score");
       gameState = "ranking";
@@ -1490,11 +1659,14 @@ function handleInput(x, y) {
   }
 
   if (gameState === "ranking") {
-    // 돌아가기 버튼
-    const btnW = s(160);
-    const btnH = s(46);
+    // 닫기 버튼 (카드 내부 하단)
+    const cardW = canvasWidth * 0.88;
+    const cardH = canvasHeight * 0.82;
+    const cardY = canvasHeight * 0.08;
+    const btnW = s(140);
+    const btnH = s(42);
     const btnX = canvasWidth / 2 - btnW / 2;
-    const btnY = canvasHeight * 0.85;
+    const btnY = cardY + cardH - s(52);
     if (hitTest(x, y, btnX, btnY, btnW, btnH)) {
       setBtnPressed("ranking_back");
       gameState = "title";
@@ -1517,8 +1689,8 @@ function handleInput(x, y) {
       resultButtonTimer = 0.01;
     } else {
       const cx = canvasWidth / 2;
-      const btnW = s(150);
-      const btnH = s(50);
+      const btnW = s(130);
+      const btnH = s(44);
       const gap = s(12);
       const totalW = btnW * 2 + gap;
       const startX = cx - totalW / 2;
@@ -1572,6 +1744,7 @@ function handlePlayingInput(x, y) {
     spawnParticles(pinataX + dx * 0.2, pinataY + dy * 0.2, "pinataHit");
     spawnFloatingText(x, y, "feverTap");
     comboCount++;
+    bgHitPulse = CONFIG.bgHitPulseDuration;
     playSound("feverTap");
     triggerHaptic(CONFIG.hapticFever);
     return;
@@ -1603,8 +1776,10 @@ function handlePlayingInput(x, y) {
         screenShake.rotationDeg = 0;
         spawnParticles(cell.centerX, cell.centerY, "basicHit");
         spawnHitFlash(cell.centerX, cell.centerY, "basic");
+        spawnJellyRing(t.cellIndex, "basic");
         spawnFloatingText(cell.centerX, cell.centerY, "basic");
         comboCount++;
+    bgHitPulse = CONFIG.bgHitPulseDuration;
         playSound("basicHit");
         triggerHaptic(CONFIG.hapticBasic);
       } else if (t.type === "trap") {
@@ -1624,6 +1799,7 @@ function handlePlayingInput(x, y) {
         screenShake.rotationDeg = 0;
         spawnParticles(cell.centerX, cell.centerY, "trapHit");
         spawnHitFlash(cell.centerX, cell.centerY, "trap");
+        spawnJellyRing(t.cellIndex, "trap");
         spawnFloatingText(cell.centerX, cell.centerY, "trap");
         comboCount = 0;
         playSound("trapHit");
@@ -1670,8 +1846,10 @@ function handlePlayingInput(x, y) {
         }
         spawnParticles(cell.centerX, cell.centerY, textKey); // E등급별 파티클
         spawnHitFlash(cell.centerX, cell.centerY, textKey);
+        spawnJellyRing(t.cellIndex, "timing");
         spawnFloatingText(cell.centerX, cell.centerY, textKey);
         comboCount++;
+    bgHitPulse = CONFIG.bgHitPulseDuration;
         playSound(soundKey);
         triggerHaptic(textKey === "timingE3" ? CONFIG.hapticTimingE3
                     : textKey === "timingE2" ? CONFIG.hapticTimingE2
@@ -1760,8 +1938,10 @@ function handleSlideSuccess(t, cell) {
   screenShake.rotationDeg = 0;
   spawnParticles(cell.centerX, cell.centerY, "slideHit");
   spawnHitFlash(cell.centerX, cell.centerY, "slide");
+  spawnJellyRing(t.cellIndex, "slide");
   spawnFloatingText(cell.centerX, cell.centerY, "slideSuccess");
   comboCount++;
+  bgHitPulse = CONFIG.bgHitPulseDuration;
   playSound("slideSuccess");
   triggerHaptic(CONFIG.hapticSlideSuccess);
 
@@ -1862,6 +2042,9 @@ function startCountdown() {
   feverIntroTimer = 0;
   pendingSlideTouch = null;
   comboCount = 0;
+  bgHitPulse = 0;
+  jellyRings = [];
+  jellyCellBounce = {};
   initBgSparkles();
 
   gameState = "countdown";
@@ -2041,6 +2224,21 @@ function updateEffectsOnly(dt) {
     r.radius = r.maxRadius * easeOutQuad(1 - r.life);
     if (r.life <= 0) ripples.splice(i, 1);
   }
+  // 젤리 링 업데이트
+  for (let i = jellyRings.length - 1; i >= 0; i--) {
+    const jr = jellyRings[i];
+    jr.timer += dt;
+    if (jr.timer >= jr.duration) { jellyRings.splice(i, 1); continue; }
+    const p = jr.timer / jr.duration;
+    jr.radius = jr.startRadius + (jr.endRadius - jr.startRadius) * easeOutQuad(p);
+    jr.alpha = jr.startAlpha * (1 - p);
+  }
+  // 젤리 셀 복귀 바운스 업데이트
+  for (const ci in jellyCellBounce) {
+    const jb = jellyCellBounce[ci];
+    jb.timer += dt;
+    if (jb.timer >= jb.duration) delete jellyCellBounce[ci];
+  }
   // 화면 흔들림
   if (screenShake.active) {
     screenShake.timer -= dt;
@@ -2072,6 +2270,9 @@ function update(dt) {
       return;
     }
   }
+
+  // 배경 히트 펄스 감소
+  if (bgHitPulse > 0) bgHitPulse = Math.max(0, bgHitPulse - dt);
 
   // Fever 인트로 텍스트 오버레이 타이머
   if (feverIntro) {
@@ -2160,6 +2361,14 @@ function update(dt) {
       const phase = getCurrentDifficultyPhase();
       nextSpawnInterval = randomRange(phase.spawnInterval[0], phase.spawnInterval[1]);
     }
+    // 마지막 구간 최소 타겟 밀도 보장 (23초~)
+    const elapsed = CONFIG.stageTimeLimit - timeRemaining;
+    if (elapsed >= CONFIG.lastPhaseMinTargetsStart) {
+      const activeCount = targets.filter(t => t.state !== "despawning").length;
+      if (activeCount < CONFIG.lastPhaseMinTargets) {
+        spawnTarget();
+      }
+    }
   }
 
   // 타겟 업데이트
@@ -2169,13 +2378,34 @@ function update(dt) {
     t.lifeTimer += dt;
 
     if (t.state === "ready") {
-      // 등장 애니메이션
-      const progress = clamp(t.stateTimer / CONFIG.targetSpawnAnimDuration, 0, 1);
+      // 등장 애니메이션 (젤리 뿅! squish)
+      const dur = CONFIG.targetSpawnAnimDuration;
+      const progress = clamp(t.stateTimer / dur, 0, 1);
       t.scale = easeOutBack(progress);
+      // 젤리 squish: scaleX/scaleY 분리
+      if (progress < 0.2) {
+        const p = progress / 0.2;
+        t.scaleX = 1.0 + 0.1 * p;
+        t.scaleY = 0.7 + 0.0 * p;
+      } else if (progress < 0.48) {
+        const p = (progress - 0.2) / 0.28;
+        t.scaleX = 1.1 - 0.2 * p;
+        t.scaleY = 0.7 + 0.6 * p;
+      } else if (progress < 0.8) {
+        const p = (progress - 0.48) / 0.32;
+        t.scaleX = 0.9 + 0.2 * p;
+        t.scaleY = 1.3 - 0.35 * p;
+      } else {
+        const p = (progress - 0.8) / 0.2;
+        t.scaleX = 1.1 - 0.1 * p;
+        t.scaleY = 0.95 + 0.05 * p;
+      }
       if (progress >= 1) {
         t.state = "std";
         t.stateTimer = 0;
         t.scale = 1;
+        t.scaleX = 1;
+        t.scaleY = 1;
         // 등장 완료 시 발밑 먼지 구름
         const cell = gridLayout.cells[t.cellIndex];
         spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 4);
@@ -2202,7 +2432,6 @@ function update(dt) {
             // 미스: 패널티 없이 사라짐
             t.state = "despawning";
             t.stateTimer = 0;
-            comboCount = 0;
             const cell = gridLayout.cells[t.cellIndex];
             spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
           }
@@ -2211,7 +2440,6 @@ function update(dt) {
         if (!t._stillMode && t.indicatorScale <= 0) {
           t.state = "despawning";
           t.stateTimer = 0;
-          comboCount = 0;
           const cell = gridLayout.cells[t.cellIndex];
           spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
         }
@@ -2221,7 +2449,6 @@ function update(dt) {
       if (t.type !== "timing" && t.lifeTimer >= t.maxDuration) {
         t.state = "despawning";
         t.stateTimer = 0;
-        comboCount = 0;
         const cell = gridLayout.cells[t.cellIndex];
         spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
       }
@@ -2329,6 +2556,20 @@ function update(dt) {
     if (r.life <= 0) {
       ripples.splice(i, 1);
     }
+  }
+  // 젤리 링 업데이트 (timeup)
+  for (let i = jellyRings.length - 1; i >= 0; i--) {
+    const jr = jellyRings[i];
+    jr.timer += dt;
+    if (jr.timer >= jr.duration) { jellyRings.splice(i, 1); continue; }
+    const p = jr.timer / jr.duration;
+    jr.radius = jr.startRadius + (jr.endRadius - jr.startRadius) * easeOutQuad(p);
+    jr.alpha = jr.startAlpha * (1 - p);
+  }
+  for (const ci in jellyCellBounce) {
+    const jb = jellyCellBounce[ci];
+    jb.timer += dt;
+    if (jb.timer >= jb.duration) delete jellyCellBounce[ci];
   }
 
   // 화면 흔들림 업데이트
@@ -2525,8 +2766,13 @@ function updateCountdown(dt) {
 function render() {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-  // 배경
-  ctx.fillStyle = ASSETS.ui.background;
+  // 배경 (플레이 중이면 색상 순환)
+  if (gameState === "playing" || gameState === "timeup") {
+    const elapsed = CONFIG.stageTimeLimit - timeRemaining;
+    ctx.fillStyle = getPlayingBgColor(elapsed);
+  } else {
+    ctx.fillStyle = ASSETS.ui.background;
+  }
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   switch (gameState) {
@@ -2569,8 +2815,8 @@ function renderTitle() {
   const now = Date.now() / 1000;
   initTitleParticles();
 
-  // 1. 배경 그라데이션 (민트→크림, hue 미세 변화)
-  const hueShift = Math.sin(now * 0.628) * 5; // ±5도, 10초 주기
+  // 1. 배경 그라데이션 (상단 민트 → 하단 크림, 은은하게)
+  const hueShift = Math.sin(now * 0.628) * 3;
   const topR = 181 + Math.round(hueShift * 0.3);
   const topG = 232 + Math.round(hueShift * -0.2);
   const topB = 223 + Math.round(hueShift * 0.4);
@@ -2580,7 +2826,7 @@ function renderTitle() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  // 2. 떠다니는 파스텔 파티클
+  // 2. 떠다니는 파스텔 파티클 (크기 키우고 투명도 높여 은은하게)
   for (let i = titleParticles.length - 1; i >= 0; i--) {
     const p = titleParticles[i];
     p.y -= p.speed;
@@ -2591,10 +2837,10 @@ function renderTitle() {
       titleParticles[i] = spawnTitleParticle(false);
       continue;
     }
-    ctx.globalAlpha = p.alpha;
+    ctx.globalAlpha = p.alpha * 0.7;
     ctx.fillStyle = p.color;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, s(p.size / 2), 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, s(p.size * 0.7), 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
@@ -2602,151 +2848,172 @@ function renderTitle() {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  // 3. 제목 텍스트 (바운스 + 떠다니기 + 글로우)
-  const titleScale = 1.0 + 0.03 * Math.sin(now * Math.PI); // 2초 주기
-  const titleFloat = Math.sin(now * Math.PI * 2 / 3) * s(3); // 3초 주기
-  const titleY = canvasHeight * 0.32 + titleFloat;
-  const baseTitleSize = s(60);
-  const titleSize = baseTitleSize * titleScale;
+  // 3. 제목 (로고 이미지 우선, 없으면 텍스트)
+  const titleScale = 1.0 + 0.02 * Math.sin(now * Math.PI);
+  const titleFloat = Math.sin(now * Math.PI * 2 / 3) * s(2);
+  const titleY = canvasHeight * 0.30 + titleFloat;
 
-  ctx.save();
+  const logoImg = ASSETS.images.titleLogo ? getImage(ASSETS.images.titleLogo) : null;
+  if (logoImg) {
+    const logoW = canvasWidth * 0.7;
+    const logoH = logoW * (logoImg.naturalHeight / logoImg.naturalWidth);
+    ctx.save();
+    ctx.translate(cx, titleY);
+    ctx.scale(titleScale, titleScale);
+    ctx.drawImage(logoImg, -logoW / 2, -logoH / 2, logoW, logoH);
+    ctx.restore();
+  } else {
+    const baseTitleSize = Math.min(s(48), canvasWidth * 0.12);
+    const titleSize = baseTitleSize * titleScale;
 
-  // 글로우 효과
-  ctx.shadowColor = THEME.glow;
-  ctx.shadowBlur = s(15) + s(5) * Math.sin(now * 2);
+    ctx.save();
+    // 텍스트 그림자 (depth)
+    ctx.shadowColor = 'rgba(0,0,0,0.15)';
+    ctx.shadowBlur = s(4);
+    ctx.shadowOffsetY = s(2);
+    ctx.fillStyle = THEME.mintDark;
+    ctx.font = `bold ${titleSize}px ${FONT.number}`;
+    ctx.fillText("미니미니", cx, titleY - titleSize * 0.55);
+    ctx.fillText("두더지", cx, titleY + titleSize * 0.55);
+    ctx.restore();
+  }
 
-  // 제목 외곽선
-  ctx.strokeStyle = "rgba(91, 168, 156, 0.35)";
-  ctx.lineWidth = s(5);
-  ctx.font = `bold ${titleSize}px ${FONT.text}`;
-  ctx.strokeText("Whack!", cx, titleY);
-
-  // 제목 본문 (mintDark)
-  ctx.fillStyle = THEME.mintDark;
-  ctx.font = `bold ${titleSize}px ${FONT.text}`;
-  ctx.fillText("Whack!", cx, titleY);
-
-  ctx.restore(); // 글로우 초기화
-
-  // 제목 상단 하이라이트
-  ctx.globalAlpha = 0.2 + 0.1 * Math.sin(now * 3);
-  ctx.fillStyle = "#FFFFFF";
-  ctx.font = `bold ${titleSize}px ${FONT.text}`;
-  ctx.fillText("Whack!", cx, titleY - s(1));
-  ctx.globalAlpha = 1;
-
-  // 부제
+  // 태그라인
   ctx.fillStyle = THEME.textSecondary;
-  ctx.font = `${s(16)}px ${FONT.text}`;
-  ctx.fillText("두더지 잡기 미니게임", cx, titleY + s(42) * titleScale);
+  ctx.font = `${s(14)}px ${FONT.text}`;
+  ctx.fillText(CONFIG.titleTagline, cx, titleY + s(70));
 
-  // 4. 버튼 (맥박 Scale 1.0 ↔ 1.02, 1.5초 주기)
-  const btnPulse = 1.0 + 0.02 * Math.sin(now * Math.PI * 2 / 1.5);
-  const btnW = s(200);
-  const btnH = s(52);
+  // 4. 버튼 영역
+  const btnPulse = 1.0 + 0.015 * Math.sin(now * Math.PI * 2 / 1.5);
+  const btnW = s(220);
+  const btnH = s(50);
   const btnGap = s(14);
-  const btnStartY = canvasHeight * 0.58;
+  const btnStartY = canvasHeight * 0.62;
 
-  // Start 버튼
+  // 시작하기 버튼 (알약형, 민트)
   ctx.save();
-  const btn1CX = cx;
   const btn1CY = btnStartY + btnH / 2;
-  ctx.translate(btn1CX, btn1CY);
+  ctx.translate(cx, btn1CY);
   ctx.scale(btnPulse, btnPulse);
-  ctx.translate(-btn1CX, -btn1CY);
-  drawGameButton(cx - btnW / 2, btnStartY, btnW, btnH, "Start", "primary", "title_start");
+  ctx.translate(-cx, -btn1CY);
+  drawPillButton(cx - btnW / 2, btnStartY, btnW, btnH, "시작하기", {
+    fillColor: THEME.mint, textColor: THEME.textLight, fontSize: s(18), fontFace: FONT.text
+  });
   ctx.restore();
 
-  // Score 버튼
-  ctx.save();
+  // 기록 보기 버튼 (반투명 배경 + 민트 테두리)
   const btn2Y = btnStartY + btnH + btnGap;
-  const btn2CY = btn2Y + btnH / 2;
-  ctx.translate(btn1CX, btn2CY);
-  ctx.scale(btnPulse, btnPulse);
-  ctx.translate(-btn1CX, -btn2CY);
-  drawGameButton(cx - btnW / 2, btn2Y, btnW, btnH, "Score", "secondary", "title_score");
+  ctx.save();
+  drawRoundedRect(cx - btnW / 2, btn2Y, btnW, btnH, btnH / 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fill();
   ctx.restore();
+  drawPillButton(cx - btnW / 2, btn2Y, btnW, btnH, "기록 보기", {
+    fillColor: THEME.mint, outline: true, fontSize: s(Math.round(18 * 0.8)), fontFace: FONT.text,
+    borderWidth: s(2)
+  });
 }
 
 // ---- Tutorial 화면 ----
 function renderTutorial() {
+  // 타이틀과 동일 배경
+  const now = Date.now() / 1000;
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+  bgGrad.addColorStop(0, THEME.mintLight);
+  bgGrad.addColorStop(1, THEME.bgPrimary);
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  const cx = canvasWidth / 2;
+  const cardPad = s(16);
+  const cardW = canvasWidth - cardPad * 2;
+  const cardH = canvasHeight * 0.65;
+  const cardX = cardPad;
+  const cardY = canvasHeight * 0.08;
+
+  // 카드 패널
+  drawPanel(cardX, cardY, cardW, cardH, { cornerRadius: s(20) });
+
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
+  // 카드 타이틀
   ctx.fillStyle = THEME.mintDark;
-  ctx.font = `bold ${s(28)}px ${FONT.text}`;
-  ctx.fillText("How to Play", canvasWidth / 2, canvasHeight * 0.1);
+  ctx.font = `bold ${s(24)}px ${FONT.text}`;
+  ctx.fillText("How to Play", cx, cardY + s(30));
 
-  const startY = canvasHeight * 0.17;
-  const spacing = canvasHeight * 0.16;
-  const iconSize = s(38);
+  // 항목들
+  const items = [
+    { draw: drawBasicTargetIcon, text: "터치하여 점수 획득!", score: `+${CONFIG.scoreBasic}점`, color: THEME.mint },
+    { draw: drawTrapTargetIcon, text: "터치 금지! 감점 주의", score: `${CONFIG.scoreTrap}점`, color: THEME.coral },
+    { draw: drawTimingTargetIcon, text: "링이 줄어들 때 터치!", score: `최대 +${CONFIG.scoreTimingE3}점`, color: THEME.gold },
+    { draw: drawSlideTargetIcon, text: "화살표 방향으로 밀어!", score: `+${CONFIG.scoreSlideSuccess}점`, color: "#9B8EC7" },
+  ];
 
-  // 기본 타겟
-  drawBasicTargetIcon(canvasWidth * 0.2, startY, iconSize);
-  ctx.fillStyle = THEME.textPrimary;
-  ctx.font = `${s(16)}px ${FONT.text}`;
-  ctx.textAlign = "left";
-  ctx.fillText("터치하여 점수 획득!", canvasWidth * 0.35, startY);
-  ctx.fillStyle = THEME.mint;
-  ctx.font = `${s(13)}px ${FONT.text}`;
-  ctx.fillText(`+${CONFIG.scoreBasic}점`, canvasWidth * 0.35, startY + s(22));
+  const itemStartY = cardY + s(60);
+  const itemSpacing = (cardH - s(100)) / items.length;
+  const iconX = cardX + s(45);
+  const textX = cardX + s(80);
+  const iconSize = s(34);
 
-  // 함정 타겟
-  drawTrapTargetIcon(canvasWidth * 0.2, startY + spacing, iconSize);
-  ctx.fillStyle = THEME.textPrimary;
-  ctx.font = `${s(16)}px ${FONT.text}`;
-  ctx.textAlign = "left";
-  ctx.fillText("터치 금지! 감점 주의", canvasWidth * 0.35, startY + spacing);
-  ctx.fillStyle = THEME.coral;
-  ctx.font = `${s(13)}px ${FONT.text}`;
-  ctx.fillText(`${CONFIG.scoreTrap}점`, canvasWidth * 0.35, startY + spacing + s(22));
+  for (let i = 0; i < items.length; i++) {
+    const iy = itemStartY + itemSpacing * i + itemSpacing / 2;
 
-  // 타이밍 타겟
-  drawTimingTargetIcon(canvasWidth * 0.2, startY + spacing * 2, iconSize);
-  ctx.fillStyle = THEME.textPrimary;
-  ctx.font = `${s(16)}px ${FONT.text}`;
-  ctx.textAlign = "left";
-  ctx.fillText("링이 줄어들 때 터치!", canvasWidth * 0.35, startY + spacing * 2);
-  ctx.fillStyle = THEME.gold;
-  ctx.font = `${s(13)}px ${FONT.text}`;
-  ctx.fillText(`최대 +${CONFIG.scoreTimingE3}점`, canvasWidth * 0.35, startY + spacing * 2 + s(22));
+    // 구분선 (첫 항목 제외)
+    if (i > 0) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.05)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cardX + s(20), iy - itemSpacing / 2);
+      ctx.lineTo(cardX + cardW - s(20), iy - itemSpacing / 2);
+      ctx.stroke();
+    }
 
-  // 슬라이드 타겟
-  drawSlideTargetIcon(canvasWidth * 0.2, startY + spacing * 3, iconSize);
-  ctx.fillStyle = THEME.textPrimary;
-  ctx.font = `${s(16)}px ${FONT.text}`;
-  ctx.textAlign = "left";
-  ctx.fillText("화살표 방향으로 밀어!", canvasWidth * 0.35, startY + spacing * 3);
-  ctx.fillStyle = "#9B8EC7";
-  ctx.font = `${s(13)}px ${FONT.text}`;
-  ctx.fillText(`+${CONFIG.scoreSlideSuccess}점`, canvasWidth * 0.35, startY + spacing * 3 + s(22));
+    // 아이콘
+    items[i].draw(iconX, iy, iconSize);
 
-  // Tap to Start
+    // 텍스트
+    ctx.textAlign = "left";
+    ctx.fillStyle = THEME.textPrimary;
+    ctx.font = `${s(15)}px ${FONT.text}`;
+    ctx.fillText(items[i].text, textX, iy - s(8));
+    ctx.fillStyle = items[i].color;
+    ctx.font = `bold ${s(13)}px ${FONT.number}`;
+    ctx.fillText(items[i].score, textX, iy + s(12));
+  }
+
+  // 하단 시작 버튼
+  const btnW = s(200);
+  const btnH = s(46);
+  const btnY = cardY + cardH + s(16);
+  drawPillButton(cx - btnW / 2, btnY, btnW, btnH, "시작하기", {
+    fillColor: THEME.mint, textColor: THEME.textLight, fontSize: s(18), fontFace: FONT.text
+  });
+
+  // 안내 텍스트
   ctx.textAlign = "center";
-  const alpha = 0.5 + 0.5 * Math.sin(Date.now() / 500);
+  const alpha = 0.4 + 0.3 * Math.sin(now * 3);
   ctx.fillStyle = `rgba(91, 168, 156, ${alpha})`;
-  ctx.font = `${s(20)}px ${FONT.text}`;
-  ctx.fillText("Tap to Play", canvasWidth / 2, canvasHeight * 0.85);
+  ctx.font = `${s(13)}px ${FONT.text}`;
+  ctx.fillText("화면을 터치하세요", cx, btnY + btnH + s(20));
 }
 
 // ---- Countdown 화면 ----
 function renderCountdown() {
-  // 그리드 배경 미리 그리기 (카운트다운 중 배경으로)
   renderGrid();
 
-  // 반투명 크림 오버레이
+  // 반투명 오버레이
   ctx.fillStyle = "rgba(255, 248, 240, 0.75)";
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  // 현재 숫자의 초 내 진행도 (0→1)
   const inSecond = countdownTimer % 1.0;
 
-  // EaseOutBack 스케일 팝 효과 (등장 시 1.4→1.0)
-  const scaleT = Math.min(inSecond / 0.3, 1.0); // 0.3초 동안 애니메이션
-  const popScale = 1.0 + (1.4 - 1.0) * (1 - easeOutBack(scaleT));
+  // Scale 1.5 → 1.0 바운스 (EaseOutBack)
+  const scaleT = Math.min(inSecond / 0.3, 1.0);
+  const popScale = 1.0 + (1.5 - 1.0) * (1 - easeOutBack(scaleT));
 
   // 페이드: 0.7초 이후 페이드아웃
   const alpha = inSecond < 0.7 ? 1.0 : 1.0 - (inSecond - 0.7) / 0.3;
@@ -2756,14 +3023,15 @@ function renderCountdown() {
   ctx.scale(popScale, popScale);
   ctx.globalAlpha = clamp(alpha, 0, 1);
 
-  // 숫자 텍스트
+  // 숫자 (캔버스 폭의 40% 크기, 글로우)
   const numText = String(countdownNumber);
+  const fontSize = canvasWidth * 0.4;
+  ctx.shadowColor = THEME.mint;
+  ctx.shadowBlur = s(15);
   ctx.fillStyle = THEME.mint;
-  ctx.font = `bold ${s(120)}px ${FONT.number}`;
-  ctx.strokeStyle = "rgba(91, 168, 156, 0.3)";
-  ctx.lineWidth = s(4);
-  ctx.strokeText(numText, 0, 0);
+  ctx.font = `bold ${fontSize}px ${FONT.number}`;
   ctx.fillText(numText, 0, 0);
+  ctx.shadowColor = 'transparent';
 
   ctx.globalAlpha = 1;
   ctx.restore();
@@ -2785,9 +3053,23 @@ function renderPlaying() {
   }
   ctx.globalAlpha = 1;
 
-  // Fever 플래시 배경
+  // 히트 밝기 펄스
+  if (bgHitPulse > 0) {
+    const pulseAlpha = (comboCount >= 20 ? CONFIG.bgHitPulseCombo20
+                      : comboCount >= 10 ? CONFIG.bgHitPulseCombo10
+                      : CONFIG.bgHitPulseAlpha) * (bgHitPulse / CONFIG.bgHitPulseDuration);
+    ctx.fillStyle = `rgba(255,255,255,${pulseAlpha})`;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+
+  // Fever 배경 (크림→밝은 피치/코랄 톤으로 부드럽게 전환)
   if (isFever) {
-    const flashAlpha = 0.08 + 0.06 * Math.sin(Date.now() / 150);
+    const feverBgGrad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+    feverBgGrad.addColorStop(0, 'rgba(255,181,167,0.15)');
+    feverBgGrad.addColorStop(1, 'rgba(255,138,128,0.10)');
+    ctx.fillStyle = feverBgGrad;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    const flashAlpha = 0.06 + 0.04 * Math.sin(Date.now() / 150);
     ctx.fillStyle = `rgba(255, 215, 0, ${flashAlpha})`;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
   }
@@ -2842,149 +3124,168 @@ function renderPlaying() {
     }
   }
 
-  // Fever 인트로 텍스트
+  // Fever 인트로 텍스트 (무지개 그라데이션 + 글로우 + 바운스)
   if (feverIntro) {
     const p = feverIntroTimer / FEVER_INTRO_DURATION;
-    // 0~0.625(0.5s): 등장+유지, 0.625~1.0(0.3s): 페이드아웃
     const fadeOutStart = 0.5 / FEVER_INTRO_DURATION;
     const alpha = p < fadeOutStart ? 1.0 : 1.0 - (p - fadeOutStart) / (1 - fadeOutStart);
-    // 스케일: 0.3→1.0 (EaseOutBack, 처음 0.3초)
     const scaleUpEnd = 0.3 / FEVER_INTRO_DURATION;
     const scaleP = clamp(p / scaleUpEnd, 0, 1);
     const textScale = 0.3 + 0.7 * easeOutBack(scaleP);
+    // 바운스 (등장 후 미세 떨림)
+    const bounce = scaleP >= 1 ? 1.0 + 0.02 * Math.sin(Date.now() / 80) : 1.0;
 
     ctx.save();
-    ctx.globalAlpha = clamp(alpha, 0, 1) * 0.9;
+    ctx.globalAlpha = clamp(alpha, 0, 1) * 0.95;
     ctx.translate(canvasWidth / 2, canvasHeight * 0.45);
-    ctx.scale(textScale, textScale);
+    ctx.scale(textScale * bounce, textScale * bounce);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
+    const fontSize = s(48);
+    ctx.font = `bold ${fontSize}px ${FONT.number}`;
+
+    // 글로우
+    ctx.shadowColor = THEME.gold;
+    ctx.shadowBlur = s(20);
+
+    // 무지개 그라데이션
+    const rainbowGrad = ctx.createLinearGradient(-s(120), 0, s(120), 0);
+    const hueOffset = (Date.now() / 20) % 360;
+    rainbowGrad.addColorStop(0, `hsl(${hueOffset % 360}, 90%, 60%)`);
+    rainbowGrad.addColorStop(0.25, `hsl(${(hueOffset + 60) % 360}, 90%, 60%)`);
+    rainbowGrad.addColorStop(0.5, `hsl(${(hueOffset + 120) % 360}, 90%, 60%)`);
+    rainbowGrad.addColorStop(0.75, `hsl(${(hueOffset + 240) % 360}, 90%, 60%)`);
+    rainbowGrad.addColorStop(1, `hsl(${(hueOffset + 300) % 360}, 90%, 60%)`);
+
     // 외곽선
-    ctx.strokeStyle = "rgba(180, 140, 0, 0.4)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
     ctx.lineWidth = s(5);
-    ctx.font = `bold ${s(48)}px ${FONT.text}`;
-    ctx.strokeText("Fever Time!", 0, 0);
+    ctx.strokeText("FEVER TIME!", 0, 0);
 
     // 텍스트
-    ctx.fillStyle = THEME.gold;
-    ctx.fillText("Fever Time!", 0, 0);
+    ctx.fillStyle = rainbowGrad;
+    ctx.fillText("FEVER TIME!", 0, 0);
 
+    ctx.shadowColor = 'transparent';
     ctx.globalAlpha = 1;
     ctx.restore();
   }
 }
 
 function renderHUD() {
-  const hudY = s(10);
-  const hudPadH = s(10);
-  const hudPadV = s(6);
+  const margin = s(12);
+  const panelY = s(10);
+  const panelW = canvasWidth - margin * 2;
+  const panelH = s(56);
+  const panelR = s(CONFIG.uiCornerRadius);
 
-  // ── 점수 (둥근 반투명 배경) ──
-  const scoreText = score.toString();
-  ctx.font = `bold ${s(26)}px ${FONT.number}`;
-  const scoreW = ctx.measureText(scoreText).width;
-  const scoreBgW = scoreW + hudPadH * 2;
-  const scoreBgH = s(26) + hudPadV * 2;
-  const scoreBgX = s(12);
-  const scoreBgY = hudY;
+  // ── 상단 정보 패널 (반투명 카드) ──
+  drawPanel(margin, panelY, panelW, panelH, { cornerRadius: panelR });
 
-  ctx.fillStyle = "rgba(255, 248, 240, 0.85)";
-  roundRect(ctx, scoreBgX, scoreBgY, scoreBgW, scoreBgH, s(10));
-  ctx.fill();
-  ctx.strokeStyle = THEME.gridLine;
-  ctx.lineWidth = s(1);
-  roundRect(ctx, scoreBgX, scoreBgY, scoreBgW, scoreBgH, s(10));
-  ctx.stroke();
+  const pad = s(12);
 
+  // 점수 (왼쪽): SCORE 라벨 + 숫자
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
+  // 텍스트 미세 그림자
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.15)';
+  ctx.shadowBlur = s(3);
+  ctx.shadowOffsetY = s(1);
+
+  ctx.fillStyle = THEME.textSecondary;
+  ctx.font = `${s(10)}px ${FONT.text}`;
+  ctx.fillText("SCORE", margin + pad, panelY + panelH * 0.32);
+
   ctx.fillStyle = THEME.textPrimary;
-  ctx.font = `bold ${s(26)}px ${FONT.number}`;
-  ctx.fillText(scoreText, scoreBgX + hudPadH, scoreBgY + scoreBgH / 2);
+  ctx.font = `bold ${s(28)}px ${FONT.number}`;
+  ctx.fillText(score.toString(), margin + pad, panelY + panelH * 0.68);
+  ctx.restore();
 
-  // ── 타이머 (원형 프로그레스 바) ──
-  const timerRadius = s(22);
-  const timerCX = canvasWidth - s(12) - timerRadius;
-  const timerCY = hudY + scoreBgH / 2;
-  const timerRatio = clamp(timeRemaining / CONFIG.stageTimeLimit, 0, 1);
+  // 타이머 (오른쪽): 둥근 사각형 안에 남은 초
   const timerSeconds = Math.ceil(timeRemaining);
-  const isUrgent = timeRemaining <= 5;
+  const isUrgent10 = timeRemaining <= 10;
+  const isUrgent5 = timeRemaining <= 5;
+  const timerW = s(48);
+  const timerH = s(36);
+  const timerX = margin + panelW - pad - timerW;
+  const timerY = panelY + (panelH - timerH) / 2;
+  const timerR = s(10);
 
-  // 배경 원
-  ctx.fillStyle = "rgba(255, 248, 240, 0.85)";
-  ctx.beginPath();
-  ctx.arc(timerCX, timerCY, timerRadius, 0, Math.PI * 2);
+  // 타이머 배경
+  const timerBgColor = isUrgent10 ? (isUrgent5 ? 'rgba(255,138,128,0.15)' : 'rgba(255,138,128,0.08)') : 'rgba(0,0,0,0.04)';
+  drawRoundedRect(timerX, timerY, timerW, timerH, timerR);
+  ctx.fillStyle = timerBgColor;
   ctx.fill();
-  ctx.strokeStyle = THEME.gridLine;
-  ctx.lineWidth = s(1);
-  ctx.beginPath();
-  ctx.arc(timerCX, timerCY, timerRadius, 0, Math.PI * 2);
-  ctx.stroke();
 
-  // 프로그레스 아크
-  const arcStart = -Math.PI / 2;
-  const arcEnd = arcStart + Math.PI * 2 * timerRatio;
-  ctx.lineWidth = s(3.5);
-  ctx.lineCap = "round";
-  if (isUrgent) {
-    const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 150);
-    ctx.strokeStyle = `rgba(255, 138, 128, ${pulse})`;
-  } else {
-    ctx.strokeStyle = THEME.mint;
-  }
-  ctx.beginPath();
-  ctx.arc(timerCX, timerCY, timerRadius - s(4), arcStart, arcEnd);
-  ctx.stroke();
-
-  // 숫자
+  // 타이머 숫자
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = isUrgent ? THEME.coral : THEME.textPrimary;
-  ctx.font = `bold ${s(20)}px ${FONT.number}`;
-  ctx.fillText(timerSeconds.toString(), timerCX, timerCY + s(1));
+  let timerColor = THEME.textPrimary;
+  if (isUrgent5) {
+    const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 120);
+    timerColor = `rgba(255, 138, 128, ${pulse})`;
+  } else if (isUrgent10) {
+    timerColor = THEME.coral;
+  }
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.15)';
+  ctx.shadowBlur = s(2);
+  ctx.shadowOffsetY = s(1);
+  ctx.fillStyle = timerColor;
+  ctx.font = `bold ${s(22)}px ${FONT.number}`;
+  ctx.fillText(timerSeconds.toString(), timerX + timerW / 2, timerY + timerH / 2);
+  ctx.restore();
 
-  // ── Fever 게이지 바 (그라데이션) ──
-  const barX = s(12);
-  const barY = scoreBgY + scoreBgH + s(6);
-  const barWidth = canvasWidth - s(24);
-  const barHeight = s(10);
-  const barRadius = s(5);
+  // ── Fever 게이지 바 ──
+  const barX = margin;
+  const barY = panelY + panelH + s(6);
+  const barWidth = panelW;
+  const barHeight = s(13);
+  const barRadius = s(7);
 
-  // 바 배경
-  ctx.fillStyle = THEME.gaugeBase;
-  roundRect(ctx, barX, barY, barWidth, barHeight, barRadius);
+  // 바 배경 (약간 어둡게)
+  drawRoundedRect(barX, barY, barWidth, barHeight, barRadius);
+  ctx.fillStyle = 'rgba(0,0,0,0.06)';
   ctx.fill();
 
   // 채워진 부분
   const fillRatio = feverGauge / CONFIG.feverGaugeMax;
   if (fillRatio > 0) {
-    const fillWidth = barWidth * fillRatio;
+    const fillWidth = Math.max(barHeight, barWidth * fillRatio);
     ctx.save();
-    roundRect(ctx, barX, barY, fillWidth, barHeight, barRadius);
+    drawRoundedRect(barX, barY, fillWidth, barHeight, barRadius);
     ctx.clip();
     if (isFever) {
-      ctx.fillStyle = THEME.gold;
-      ctx.fillRect(barX, barY, fillWidth, barHeight);
-    } else if (fillRatio >= 0.8) {
-      // 80% 이상: 민트→금색 그라데이션
+      const feverGrad = ctx.createLinearGradient(barX, 0, barX + barWidth, 0);
+      feverGrad.addColorStop(0, THEME.gold);
+      feverGrad.addColorStop(1, THEME.coral);
+      ctx.fillStyle = feverGrad;
+    } else {
+      // 민트 → 피치 그라데이션
       const grad = ctx.createLinearGradient(barX, 0, barX + barWidth, 0);
       grad.addColorStop(0, THEME.mint);
-      grad.addColorStop(0.7, THEME.mint);
-      grad.addColorStop(1, THEME.gold);
+      grad.addColorStop(1, THEME.peach);
       ctx.fillStyle = grad;
-      ctx.fillRect(barX, barY, fillWidth, barHeight);
-    } else {
-      ctx.fillStyle = THEME.gaugeFill;
-      ctx.fillRect(barX, barY, fillWidth, barHeight);
     }
+    ctx.fillRect(barX, barY, fillWidth, barHeight);
     // 상단 하이라이트 (광택)
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.25;
     ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(barX, barY, fillWidth, barHeight * 0.35);
+    ctx.fillRect(barX, barY, fillWidth, barHeight * 0.4);
     ctx.globalAlpha = 1;
     ctx.restore();
   }
+
+  // "FEVER" 텍스트 (바 안에)
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.globalAlpha = fillRatio > 0.5 ? 0.5 : 0.25;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = `bold ${s(9)}px ${FONT.text}`;
+  ctx.fillText("FEVER", barX + barWidth / 2, barY + barHeight / 2);
+  ctx.globalAlpha = 1;
 
   // 함정 터치: 게이지 빨간 깜빡임
   if (gaugeFlashTimer > 0) {
@@ -2992,7 +3293,7 @@ function renderHUD() {
     ctx.save();
     ctx.globalAlpha = flashAlpha * (Math.sin(gaugeFlashTimer * 30) > 0 ? 1 : 0.3);
     ctx.fillStyle = "#FF4444";
-    roundRect(ctx, barX, barY, barWidth, barHeight, barRadius);
+    drawRoundedRect(barX, barY, barWidth, barHeight, barRadius);
     ctx.fill();
     ctx.restore();
   }
@@ -3015,12 +3316,6 @@ function renderHUD() {
         ctx.globalAlpha = 1;
       }
     }
-    const pulseAlpha = 0.12 + 0.08 * Math.sin(now * 6);
-    ctx.globalAlpha = pulseAlpha;
-    ctx.fillStyle = "#FFFFFF";
-    roundRect(ctx, barX, barY, fillWidth, barHeight, barRadius);
-    ctx.fill();
-    ctx.globalAlpha = 1;
   }
 
   // 100% 번쩍 플래시
@@ -3028,7 +3323,7 @@ function renderHUD() {
     const flashAlpha = (1 - feverIntroTimer / 0.3) * 0.7;
     ctx.globalAlpha = flashAlpha;
     ctx.fillStyle = "#FFFFFF";
-    roundRect(ctx, barX - s(2), barY - s(2), barWidth + s(4), barHeight + s(4), barRadius + s(1));
+    drawRoundedRect(barX - s(2), barY - s(2), barWidth + s(4), barHeight + s(4), barRadius + s(1));
     ctx.fill();
     ctx.globalAlpha = 1;
   }
@@ -3038,66 +3333,159 @@ function renderHUD() {
     ctx.textAlign = "center";
     const feverWarning = feverTimer <= CONFIG.feverWarningTime && feverTimer > 0;
     ctx.fillStyle = feverWarning ? THEME.coral : THEME.gold;
-    ctx.font = `bold ${s(13)}px ${FONT.number}`;
-    ctx.fillText(`FEVER! ${Math.ceil(feverTimer)}s`, canvasWidth / 2, barY + barHeight + s(5));
+    ctx.font = `bold ${s(12)}px ${FONT.number}`;
+    ctx.fillText(`FEVER! ${Math.ceil(feverTimer)}s`, canvasWidth / 2, barY + barHeight + s(10));
+  }
+
+  // ── 콤보 카운터 ──
+  if (comboCount > 0) {
+    const comboX = margin + panelW - pad;
+    const comboY = barY + barHeight + s(14);
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    const isHighCombo = comboCount >= 10;
+    if (isHighCombo) {
+      ctx.save();
+      ctx.shadowColor = THEME.gold;
+      ctx.shadowBlur = s(6);
+    }
+    ctx.fillStyle = isHighCombo ? THEME.gold : THEME.textSecondary;
+    ctx.font = `bold ${s(14)}px ${FONT.number}`;
+    ctx.fillText(`${comboCount} COMBO`, comboX, comboY);
+    if (isHighCombo) ctx.restore();
+  }
+}
+
+// 젤리 셀 색상 (타겟 타입별)
+function getJellyColors(targetType) {
+  if (isFever) return { fill: 'rgba(255,181,167,0.15)', border: 'rgba(255,181,167,0.30)', highlight: 'rgba(255,255,255,0.25)' };
+  switch (targetType) {
+    case 'trap':    return { fill: 'rgba(255,138,128,0.12)', border: 'rgba(255,138,128,0.25)', highlight: 'rgba(255,255,255,0.25)' };
+    case 'timing':
+    case 'timingE1': case 'timingE2': case 'timingE3':
+                    return { fill: 'rgba(255,215,0,0.10)',   border: 'rgba(255,215,0,0.25)',   highlight: 'rgba(255,255,255,0.25)' };
+    case 'slide':   return { fill: 'rgba(180,130,255,0.10)', border: 'rgba(180,130,255,0.25)', highlight: 'rgba(255,255,255,0.25)' };
+    case 'basic':   return { fill: 'rgba(126,206,192,0.15)', border: 'rgba(126,206,192,0.25)', highlight: 'rgba(255,255,255,0.30)' };
+    default:        return { fill: 'rgba(126,206,192,0.12)', border: 'rgba(126,206,192,0.25)', highlight: 'rgba(255,255,255,0.30)' };
   }
 }
 
 function renderGrid() {
   const cs = gridLayout.cellSize;
-  const r = s(12); // 셀 둥근 모서리
+  const r = s(12);
 
   // 그리드 전체 영역 배경
   const pad = s(8);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.06)';
+  ctx.shadowBlur = s(10);
+  ctx.shadowOffsetY = s(3);
   ctx.fillStyle = THEME.bgGrid;
-  roundRect(ctx,
+  drawRoundedRect(
     gridLayout.offsetX - pad,
     gridLayout.offsetY - pad,
     gridLayout.totalWidth + pad * 2,
     gridLayout.totalHeight + pad * 2,
     s(16));
   ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.restore();
 
-  for (const cell of gridLayout.cells) {
-    // 외곽 그림자 (입체감)
-    ctx.fillStyle = THEME.shadow;
-    roundRect(ctx, cell.x + s(1.5), cell.y + s(2), cs, cs, r);
-    ctx.fill();
+  const now = Date.now() / 1000;
+  const jellyR = cs * 0.38; // 젤리 반지름 (약간 더 크게)
+  const breathPeriod = isFever ? (2 * Math.PI / 2.5) * 1.5 : 2 * Math.PI / 2.5; // Fever시 1.5배 빠름
 
-    // 셀 배경
+  for (let ci = 0; ci < gridLayout.cells.length; ci++) {
+    const cell = gridLayout.cells[ci];
+    const phase = ci * 0.7;
+
+    // 셀 배경 (기존 사각형)
     ctx.fillStyle = THEME.gridCellBg;
     roundRect(ctx, cell.x, cell.y, cs, cs, r);
     ctx.fill();
-
-    // 셀 상단 하이라이트 (입체감)
-    ctx.save();
-    roundRect(ctx, cell.x, cell.y, cs, cs, r);
-    ctx.clip();
-    ctx.globalAlpha = 0.06;
-    ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(cell.x, cell.y, cs, cs * 0.35);
-    ctx.globalAlpha = 1;
-    ctx.restore();
-
-    // 중앙 원형 홈 (타겟 등장 위치 힌트)
-    const holeR = cs * 0.3;
-    ctx.fillStyle = "rgba(120, 100, 80, 0.08)";
-    ctx.beginPath();
-    ctx.arc(cell.centerX, cell.centerY, holeR, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 홈 안쪽 밝은 하이라이트 (오목한 느낌)
-    ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
-    ctx.beginPath();
-    ctx.arc(cell.centerX, cell.centerY + holeR * 0.15, holeR * 0.75, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 셀 테두리
     ctx.strokeStyle = THEME.gridLine;
     ctx.lineWidth = s(1);
     roundRect(ctx, cell.x, cell.y, cs, cs, r);
     ctx.stroke();
+
+    // 타겟 정보 확인
+    const target = targets.find(t => t.cellIndex === ci && t.state !== "despawning");
+    const hasTarget = !!target;
+
+    // 젤리 색상 결정
+    const jc = hasTarget ? getJellyColors(target.type) : getJellyColors(null);
+
+    // 말랑말랑 애니메이션 (X/Y 반대 위상)
+    let jScaleX, jScaleY;
+    if (hasTarget) {
+      jScaleX = 1.0;
+      jScaleY = 1.0;
+    } else {
+      const sinVal = Math.sin(now * breathPeriod + phase);
+      jScaleX = 0.97 + 0.04 * (0.5 + 0.5 * sinVal);     // 0.97~1.01
+      jScaleY = 0.97 + 0.04 * (0.5 - 0.5 * sinVal);     // 1.01~0.97 (반대)
+    }
+
+    // 히트 후 복귀 바운스
+    const bounce = jellyCellBounce[ci];
+    if (bounce && !hasTarget) {
+      const bp = clamp(bounce.timer / bounce.duration, 0, 1);
+      const bounceScale = bp < 0.5
+        ? easeOutBack(bp * 2) * 0.8   // 0→0.8
+        : 0.8 + (1.0 - 0.8) * easeOutQuad((bp - 0.5) * 2); // 0.8→1.0
+      jScaleX *= bounceScale;
+      jScaleY *= bounceScale;
+    }
+
+    // 젤리 그리기
+    ctx.save();
+    ctx.translate(cell.centerX, cell.centerY);
+    ctx.scale(jScaleX, jScaleY);
+
+    // 하단 그림자
+    ctx.save();
+    ctx.shadowColor = isFever ? 'rgba(255,181,167,0.15)' : 'rgba(126,206,192,0.15)';
+    ctx.shadowBlur = s(4);
+    ctx.shadowOffsetY = s(2);
+    ctx.beginPath();
+    ctx.arc(0, 0, jellyR, 0, Math.PI * 2);
+    ctx.fillStyle = jc.fill;
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.restore();
+
+    // 테두리
+    ctx.beginPath();
+    ctx.arc(0, 0, jellyR, 0, Math.PI * 2);
+    ctx.strokeStyle = jc.border;
+    ctx.lineWidth = s(2);
+    ctx.stroke();
+
+    // 상단 하이라이트 (광택)
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, 0, jellyR, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.beginPath();
+    ctx.ellipse(0, -jellyR * 0.35, jellyR * 0.7, jellyR * 0.35, 0, 0, Math.PI * 2);
+    ctx.fillStyle = jc.highlight;
+    ctx.fill();
+    ctx.restore();
+
+    ctx.restore(); // translate+scale 해제
   }
+
+  // 젤리 링 이펙트 렌더링
+  for (const jr of jellyRings) {
+    if (jr.alpha <= 0) continue;
+    ctx.beginPath();
+    ctx.arc(jr.x, jr.y, jr.radius, 0, Math.PI * 2);
+    ctx.strokeStyle = jr.color;
+    ctx.globalAlpha = jr.alpha;
+    ctx.lineWidth = s(2) * (1 - jr.timer / jr.duration);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 }
 
 function renderTargets() {
@@ -4011,17 +4399,18 @@ function renderRipples() {
 
 // ---- Timeup 화면 ----
 function renderTimeup() {
-  // 그리드 배경 유지 (타겟 없음)
   renderGrid();
 
-  // 크림 오버레이
-  ctx.fillStyle = "rgba(255, 248, 240, 0.8)";
+  // 어두운 오버레이 (0.3초 페이드인)
+  const progress = 1 - timeupTimer / CONFIG.timeupDisplayDuration; // 0→1
+  const overlayAlpha = Math.min(progress / 0.3, 1) * 0.25;
+  ctx.fillStyle = `rgba(0, 0, 0, ${overlayAlpha})`;
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   const cx = canvasWidth / 2;
   const cy = canvasHeight / 2;
 
-  // 캐릭터 (향후 별도 이미지 삽입 예정)
+  // 캐릭터
   if (ASSETS.timeup.image) {
     const img = getImage(ASSETS.timeup.image);
     if (img) {
@@ -4032,21 +4421,26 @@ function renderTimeup() {
     }
   }
 
-  // "Time Up!" 텍스트
-  const progress = 1 - timeupTimer / CONFIG.timeupDisplayDuration; // 0→1
-  const textScale = progress < 0.2 ? easeOutBack(progress / 0.2) : 1;
-  const fontSize = s(48) * textScale;
+  // "TIME UP!" 텍스트: Scale 0 → 1.2 → 1.0 바운스, 글로우
+  const scaleP = progress < 0.25 ? progress / 0.25 : 1;
+  const textScale = scaleP < 1 ? easeOutBack(scaleP) : 1;
 
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(textScale, textScale);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.font = `bold ${fontSize}px ${FONT.text}`;
 
-  ctx.strokeStyle = "rgba(255, 138, 128, 0.3)";
-  ctx.lineWidth = s(5);
-  ctx.strokeText("Time Up!", cx, cy);
+  // 글로우
+  ctx.shadowColor = THEME.coral;
+  ctx.shadowBlur = s(15);
 
+  ctx.font = `bold ${s(52)}px ${FONT.number}`;
   ctx.fillStyle = THEME.coral;
-  ctx.fillText("Time Up!", cx, cy);
+  ctx.fillText("TIME UP!", 0, 0);
+
+  ctx.shadowColor = 'transparent';
+  ctx.restore();
 }
 
 function drawTimeupCharacter(cx, cy) {
@@ -4147,15 +4541,14 @@ function renderResult() {
   else if (score >= CONFIG.star2Threshold) totalStars = 2;
   else if (score >= CONFIG.star1Threshold) totalStars = 1;
 
-  // B-4: 배경: 연한 민트
-  ctx.fillStyle = THEME.bgSecondary;
+  // 어두운 오버레이
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  // B-4: 배경 부유 반짝임 (천천히 올라가는 금/민트 반짝임)
+  // 배경 부유 반짝임
   const sparkleBase = totalStars >= 3 && resultStarsRevealed >= 3 ? 30 : 10;
   for (let i = 0; i < sparkleBase; i++) {
     const sx = ((now * 0.015 + i * 0.083) % 1.0) * canvasWidth;
-    // 아래→위로 천천히 올라감
     const sy = (1.0 - ((now * 0.025 * (0.3 + i * 0.07) + i * 0.09) % 1.0)) * canvasHeight;
     const sa = 0.12 + 0.08 * Math.sin(now * 2.5 + i * 1.5);
     ctx.globalAlpha = sa;
@@ -4165,6 +4558,13 @@ function renderResult() {
     ctx.fill();
   }
   ctx.globalAlpha = 1;
+
+  // 결과 카드
+  const cardW = canvasWidth - s(32);
+  const cardH = canvasHeight * 0.6;
+  const cardX = (canvasWidth - cardW) / 2;
+  const cardY = canvasHeight * 0.10;
+  drawPanel(cardX, cardY, cardW, cardH, { cornerRadius: s(20) });
 
   // B-4: 별 파티클 렌더링
   for (const p of resultStarParticles) {
@@ -4184,20 +4584,10 @@ function renderResult() {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  // 결과 타이틀
-  const titleY = canvasHeight * 0.13;
-  const titleSize = s(32);
-  ctx.fillStyle = "rgba(91, 168, 156, 0.15)";
-  ctx.font = `bold ${titleSize}px ${FONT.text}`;
-  ctx.fillText("Result", cx + s(2), titleY + s(3));
-  ctx.strokeStyle = "rgba(91, 168, 156, 0.3)";
-  ctx.lineWidth = s(3);
-  ctx.strokeText("Result", cx, titleY);
-  const titleGrad = ctx.createLinearGradient(cx - s(60), titleY - s(16), cx + s(60), titleY + s(16));
-  titleGrad.addColorStop(0, THEME.mintDark);
-  titleGrad.addColorStop(0.5, THEME.mint);
-  titleGrad.addColorStop(1, THEME.mintDark);
-  ctx.fillStyle = titleGrad;
+  // 결과 타이틀 (카드 상단)
+  const titleY = cardY + s(30);
+  ctx.fillStyle = THEME.mintDark;
+  ctx.font = `bold ${s(26)}px ${FONT.text}`;
   ctx.fillText("Result", cx, titleY);
 
   // "SCORE" 라벨
@@ -4334,34 +4724,51 @@ function renderResult() {
     ctx.fillText(gradeTexts[totalStars], cx, gradeY);
   }
 
-  // B-3: 버튼 (슬라이드업 등장 + 미세 맥박)
+  // NEW RECORD 표시
+  if (resultPhase === "done") {
+    const scores = JSON.parse(localStorage.getItem("whack_scores") || "[]");
+    const isNewRecord = scores.length === 0 || score > scores[0];
+    if (isNewRecord && score > 0) {
+      const nrY = canvasHeight * 0.60;
+      ctx.save();
+      ctx.shadowColor = THEME.gold;
+      ctx.shadowBlur = s(8 + 4 * Math.sin(now * 4));
+      ctx.fillStyle = THEME.gold;
+      ctx.font = `bold ${s(18)}px ${FONT.number}`;
+      ctx.fillText("NEW RECORD!", cx, nrY);
+      ctx.restore();
+    }
+  }
+
+  // 버튼 (슬라이드업 등장 + 알약형)
   if (resultPhase === "done" && resultButtonTimer > 0) {
-    const btnW = s(150);
-    const btnH = s(50);
+    const btnW = s(130);
+    const btnH = s(44);
     const gap = s(12);
     const totalW = btnW * 2 + gap;
     const startX = cx - totalW / 2;
     const baseBtnY = canvasHeight * 0.78;
 
-    // B-3: 슬라이드업 (0.3초 동안 아래에서 올라옴)
     const slideProgress = clamp(resultButtonTimer / 0.3, 0, 1);
     const slideEased = easeOutBack(slideProgress);
     const slideOffset = (1 - slideEased) * s(40);
     const btnY = baseBtnY + slideOffset;
 
-    // B-3: 미세 맥박 (1.0 ↔ 1.02)
-    const pulse = slideProgress >= 1 ? 1 + 0.02 * Math.sin(now * Math.PI * 2) : 1;
-
-    ctx.save();
-    ctx.translate(cx, btnY + btnH / 2);
-    ctx.scale(pulse, pulse);
-    ctx.translate(-cx, -(btnY + btnH / 2));
-
     ctx.globalAlpha = slideEased;
-    drawGameButton(startX, btnY, btnW, btnH, "Retry", "primary", "result_retry");
-    drawGameButton(startX + btnW + gap, btnY, btnW, btnH, "Title", "secondary", "result_title");
-    ctx.globalAlpha = 1;
+    drawPillButton(startX, btnY, btnW, btnH, "다시하기", {
+      fillColor: THEME.mint, textColor: THEME.textLight, fontSize: s(16), fontFace: FONT.text
+    });
+    // 타이틀로 버튼: 반투명 배경 + 민트 테두리
+    ctx.save();
+    drawRoundedRect(startX + btnW + gap, btnY, btnW, btnH, btnH / 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fill();
     ctx.restore();
+    drawPillButton(startX + btnW + gap, btnY, btnW, btnH, "타이틀로", {
+      fillColor: THEME.mint, outline: true, fontSize: s(16), fontFace: FONT.text,
+      textColor: THEME.mintDark
+    });
+    ctx.globalAlpha = 1;
   }
 
   // 3성 화면 플래시
@@ -4382,66 +4789,101 @@ function getStarCount(sc) {
 
 function renderRanking() {
   const cx = canvasWidth / 2;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+
+  // 어두운 오버레이
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 카드 크기/위치
+  const cardW = canvasWidth * 0.88;
+  const cardH = canvasHeight * 0.82;
+  const cardX = cx - cardW / 2;
+  const cardY = canvasHeight * 0.08;
+
+  drawPanel(cardX, cardY, cardW, cardH);
 
   // 타이틀
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   ctx.fillStyle = THEME.mintDark;
-  ctx.font = `bold ${s(30)}px ${FONT.text}`;
-  ctx.fillText("Score", cx, canvasHeight * 0.08);
+  ctx.font = `bold ${s(24)}px ${FONT.number}`;
+  ctx.fillText("BEST SCORES", cx, cardY + s(30));
 
   // 구분선
-  ctx.strokeStyle = THEME.gridLine;
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
+  const divY = cardY + s(50);
   ctx.beginPath();
-  ctx.moveTo(cx - s(100), canvasHeight * 0.12);
-  ctx.lineTo(cx + s(100), canvasHeight * 0.12);
+  ctx.moveTo(cardX + s(20), divY);
+  ctx.lineTo(cardX + cardW - s(20), divY);
   ctx.stroke();
 
   const scores = loadScores();
-  const listStartY = canvasHeight * 0.17;
-  const rowH = canvasHeight * 0.063;
+  const listStartY = divY + s(16);
+  const listH = cardH - s(50) - s(16) - s(60); // title area - gap - button area
+  const rowH = listH / MAX_SCORES;
+
+  const rankBadgeColors = [THEME.gold, "#C0C0C0", "#CD7F32"];
+  const padX = s(16);
 
   for (let i = 0; i < MAX_SCORES; i++) {
-    const y = listStartY + i * rowH;
+    const y = listStartY + i * rowH + rowH / 2;
     const entry = scores[i];
 
-    // 순위 번호
-    const rankColors = [THEME.gold, "#B8B8B8", "#CD9B6A"];
-    ctx.fillStyle = i < 3 ? rankColors[i] : THEME.textSecondary;
-    ctx.font = `bold ${s(16)}px ${FONT.text}`;
-    ctx.textAlign = "left";
-    ctx.fillText(`${i + 1}.`, cx - s(110), y);
+    // 순위 배지 (원형)
+    const badgeR = s(12);
+    const badgeX = cardX + padX + badgeR + s(4);
+    const badgeColor = i < 3 ? rankBadgeColors[i] : THEME.mint;
+    ctx.beginPath();
+    ctx.arc(badgeX, y, badgeR, 0, Math.PI * 2);
+    ctx.fillStyle = badgeColor;
+    ctx.fill();
+    // 배지 숫자
+    ctx.fillStyle = i < 3 ? '#FFFFFF' : '#FFFFFF';
+    ctx.font = `bold ${s(11)}px ${FONT.number}`;
+    ctx.textAlign = "center";
+    ctx.fillText(`${i + 1}`, badgeX, y + s(1));
 
     if (entry) {
       // 점수
       ctx.fillStyle = i < 3 ? THEME.textPrimary : THEME.textSecondary;
-      ctx.font = `bold ${s(18)}px ${FONT.number}`;
+      ctx.font = `bold ${s(17)}px ${FONT.number}`;
       ctx.textAlign = "right";
-      ctx.fillText(entry.score.toLocaleString(), cx + s(30), y);
+      const scoreX = cardX + cardW - padX - s(60);
+      ctx.fillText(entry.score.toLocaleString(), scoreX, y);
 
       // 별 표시
       const stars = getStarCount(entry.score);
-      const starSize = s(8);
+      const starSize = s(7);
       for (let j = 0; j < 3; j++) {
-        const sx = cx + s(50) + j * s(18);
+        const sx = cardX + cardW - padX - s(48) + j * s(16);
         const starColor = j < stars ? THEME.gold : "rgba(200, 190, 170, 0.25)";
         drawStar5(sx, y, starSize, starColor, j < stars);
       }
     } else {
       ctx.fillStyle = "rgba(200, 190, 170, 0.3)";
-      ctx.font = `${s(16)}px ${FONT.text}`;
-      ctx.textAlign = "right";
-      ctx.fillText("---", cx + s(30), y);
+      ctx.font = `${s(14)}px ${FONT.text}`;
+      ctx.textAlign = "center";
+      ctx.fillText("---", cx, y);
+    }
+
+    // 행 구분선 (마지막 빼고)
+    if (i < MAX_SCORES - 1) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.04)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cardX + padX, listStartY + (i + 1) * rowH);
+      ctx.lineTo(cardX + cardW - padX, listStartY + (i + 1) * rowH);
+      ctx.stroke();
     }
   }
 
-  // 돌아가기 버튼
-  const btnW = s(160);
-  const btnH = s(46);
+  // 닫기 버튼
+  const btnW = s(140);
+  const btnH = s(42);
   const btnX = cx - btnW / 2;
-  const btnY = canvasHeight * 0.85;
-  drawGameButton(btnX, btnY, btnW, btnH, "Back", "secondary", "ranking_back");
+  const btnY = cardY + cardH - s(52);
+  drawPillButton(btnX, btnY, btnW, btnH, "닫기", { outline: true, fillColor: THEME.mint });
 }
 
 function drawStar5(cx, cy, size, colorOrEarned, filledOrIndex) {
