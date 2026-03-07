@@ -209,6 +209,17 @@ const CONFIG = {
   hapticSlideSuccess: [20, 20, 40], // 슬라이드 성공: 쓱~탁
   hapticSlideFail: [15],           // 슬라이드 실패: 미세한 탭
   hapticFever: [15],               // Fever 연타: 아주 짧은 탭
+  hapticWhiff: [10],               // 빈 칸 헛스윙: 아주 짧은 진동
+  hapticMilestone10: [40],
+  hapticMilestone20: [30, 20, 40],
+  hapticMilestone30: [30, 15, 30, 15, 50],
+  hapticMilestone50: [40, 15, 40, 15, 40, 15, 60],
+
+  // ===== 콤보 마일스톤 =====
+  comboMilestones: [10, 20, 30, 50],
+
+  // ===== 빈 칸 헛스윙 사운드 =====
+  whiffHz: 300, whiffType: 'sine', whiffDuration: 0.04, whiffVol: 0.05,
 
   // ===== 볼륨 =====
   bgmVolume: 0.3,
@@ -500,6 +511,9 @@ const SOUNDS = {
   slideFail: { notes: [
     { freq: 660, type: "sine", duration: 0.04, vol: 0.06 },
   ]},
+  whiffHit: { notes: [
+    { freq: 300, type: "sine", duration: 0.04, vol: 0.05 },
+  ]},
 };
 
 // ============================================================
@@ -660,6 +674,24 @@ let ripples = [];
 let jellyRings = [];
 // 젤리 셀 복귀 바운스 (히트 후 빈 칸 다시 나타날 때)
 let jellyCellBounce = {}; // { cellIndex: { timer, duration } }
+// 젤리 셀 찌그러짐 (빈 칸 터치 헛스윙)
+let jellyCellSquish = {}; // { cellIndex: { timer, duration } }
+
+// 콤보 마일스톤 텍스트
+let milestoneNumber = 0;         // 표시 중인 숫자 (0이면 미표시)
+let milestoneTimer = 0;          // 남은 유지 시간 (초)
+let milestoneScale = 1.0;        // 현재 scale (팝인용)
+let milestoneAlpha = 1.0;        // 현재 투명도 (페이드아웃용)
+let milestonePhase = 'idle';     // 'idle' | 'popin' | 'hold' | 'fadeout'
+let milestonePopinTimer = 0;     // 팝인 애니메이션 경과 시간
+
+// 플레이 통계
+let gameStats = {
+  basicHits: 0, trapHits: 0,
+  timingE1: 0, timingE2: 0, timingE3: 0, timingMiss: 0,
+  slideSuccess: 0, slideFail: 0,
+  feverTaps: 0, maxCombo: 0, emptyTaps: 0, totalTaps: 0,
+};
 
 // 화면 흔들림
 let screenShake = { active: false, timer: 0, intensity: 0, duration: 0.3, rotationDeg: 0 };
@@ -746,13 +778,20 @@ let timeupTimer = 0;
 let resultTimer = 0;
 let resultCountScore = 0;
 let resultStarsRevealed = 0;
-let resultPhase = "countup"; // "countup" | "stars" | "done"
+let resultPhase = "sequence"; // "sequence" | "done"
 let resultStarAnimTimers = [0, 0, 0]; // 각 별의 개별 애니메이션 타이머
 let resultStarRotations = [0, 0, 0];  // 각 별의 회전각
 let resultStarParticles = [];          // 별 등장 시 금색 파티클
 let resultButtonTimer = 0;             // 버튼 등장 타이머 (0→슬라이드업)
 let resultScorePopTimer = 0;           // 카운트 완료 시 팽창 타이머
 let result3StarFlash = 0;              // 3성 화면 플래시
+let resultInputDelay = 0;              // 입력 무시 타이머 (3.5초)
+let resultBgParticles = [];            // 결과 배경 부유 파티클
+let resultSparkles = [];               // 결과 배경 십자 반짝임
+let resultIsNewRecord = false;         // 신기록 여부
+let resultCountupDone = false;         // 카운트업 완료 플래그
+let result3StarBurstDone = false;      // 3성 대폭발 파티클 발사 완료
+let resultStarRays = [null, null, null]; // 별 등장 광선 이펙트 [{timer, x, y, size}]
 
 // ============================================================
 // 유틸리티 함수
@@ -1040,6 +1079,103 @@ function playSFXOscillator(soundKey) {
     gain.gain.exponentialRampToValueAtTime(0.001, startTime + note.duration);
     osc.start(startTime);
     osc.stop(startTime + note.duration + 0.01);
+  }
+}
+
+// 마일스톤 제거
+function clearMilestone() {
+  milestoneNumber = 0;
+  milestonePhase = 'idle';
+  milestoneTimer = 0;
+  milestoneAlpha = 0;
+  milestoneScale = 0;
+}
+
+// 마일스톤 트리거
+function triggerMilestone(combo) {
+  const m = combo;
+  milestoneNumber = m;
+  milestonePhase = 'popin';
+  milestonePopinTimer = 0;
+  milestoneAlpha = 1.0;
+  milestoneScale = 0;
+  milestoneTimer = 3.0;
+
+  // 파티클 폭발 (화면 중앙)
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight * 0.16;
+  const count = m >= 50 ? 28 : 14;
+  const colors = m >= 50 ? [THEME.mint, THEME.gold, THEME.coral, THEME.peach]
+               : m >= 30 ? [THEME.coral, THEME.peach]
+               : m >= 20 ? [THEME.gold, '#FFE082']
+               : [THEME.mint, THEME.mintLight];
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + randomRange(-0.2, 0.2);
+    const speed = randomRange(2, 5) * scaleRatio * 60;
+    const sz = (m >= 50 ? 1.5 : 1.0) * randomRange(4, 8) * scaleRatio;
+    particles.push({
+      x: cx, y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0,
+      decay: 1 / 0.5,
+      size: sz,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      shape: Math.random() < 0.3 ? "star" : "circle",
+      gravity: 80,
+      rotation: Math.random() * Math.PI * 2,
+      spinSpeed: randomRange(-3, 3),
+    });
+  }
+
+  // 배경 펄스 강화
+  bgHitPulse = CONFIG.bgHitPulseDuration * 1.5;
+
+  // 사운드
+  if (audioCtx) {
+    const now = audioCtx.currentTime;
+    const vol = sfxVolume * (m >= 50 ? 1.2 : 1.0);
+    const notes = m >= 50 ? [[1047,0.25],[1319,0.25],[1568,0.25],[2093,0.25],[2637,0.25]]
+                : m >= 30 ? [[1047,0.18],[1319,0.18],[1568,0.18],[2637,0.18]]
+                : m >= 20 ? [[1319,0.15],[1568,0.15],[2093,0.15]]
+                : [[1047,0.12],[1319,0.12]];
+    for (const [freq, dur] of notes) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now);
+      gain.gain.setValueAtTime(0.12 * vol, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      osc.start(now);
+      osc.stop(now + dur + 0.01);
+    }
+  }
+
+  // 햅틱
+  const hapticKey = `hapticMilestone${m <= 10 ? 10 : m <= 20 ? 20 : m <= 30 ? 30 : 50}`;
+  triggerHaptic(CONFIG[hapticKey]);
+}
+
+// 콤보 피치 무시 사운드 재생
+function playSoundFixed(soundKey) {
+  if (!audioCtx) return;
+  const def = SOUNDS[soundKey];
+  if (!def || !def.notes) return;
+  const now = audioCtx.currentTime;
+  for (const note of def.notes) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = note.type || "sine";
+    osc.frequency.setValueAtTime(note.freq, now);
+    const vol = (note.vol || 0.15) * sfxVolume;
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + note.duration);
+    osc.start(now);
+    osc.stop(now + note.duration + 0.01);
   }
 }
 
@@ -1479,6 +1615,25 @@ function spawnDustPuff(x, y, count) {
   }
 }
 
+function spawnWhiffSmoke(x, y) {
+  for (let i = 0; i < 3 + Math.floor(Math.random() * 2); i++) {
+    particles.push({
+      x: x + randomRange(-6, 6) * scaleRatio,
+      y: y + randomRange(-4, 4) * scaleRatio,
+      vx: randomRange(-15, 15) * scaleRatio,
+      vy: randomRange(-30, -80) * scaleRatio * 0.01,
+      life: 1.0,
+      decay: 1 / 0.3, // 0.3초 수명
+      size: randomRange(3, 6) * scaleRatio,
+      color: "rgba(180,180,180,0.4)",
+      shape: "circle",
+      gravity: -20,
+      rotation: 0,
+      spinSpeed: 0,
+    });
+  }
+}
+
 // ============================================================
 // 플로팅 텍스트
 // ============================================================
@@ -1675,7 +1830,11 @@ function handleInput(x, y) {
   }
 
   if (gameState === "result") {
+    // 3.5초간 입력 무시 (D-7)
+    if (resultInputDelay > 0) return;
+
     if (resultPhase !== "done") {
+      // 시퀀스 스킵 → done 상태로 전환
       resultCountScore = score;
       let totalStars = 0;
       if (score >= CONFIG.star3Threshold) totalStars = 3;
@@ -1683,29 +1842,37 @@ function handleInput(x, y) {
       else if (score >= CONFIG.star1Threshold) totalStars = 1;
       resultStarsRevealed = totalStars;
       resultStarAnimTimers = [1, 1, 1];
-      resultStarRotations = [Math.PI * 2, Math.PI * 2, Math.PI * 2];
+      resultStarRotations = [0, 0, 0]; // B-4: 애니메이션 완료 시 0도 (정상 ☆)
       resultPhase = "done";
-      resultTimer = 0;
-      resultButtonTimer = 0.01;
+      resultTimer = 4;
+      resultCountupDone = true;
     } else {
       const cx = canvasWidth / 2;
-      const btnW = s(130);
-      const btnH = s(44);
-      const gap = s(12);
-      const totalW = btnW * 2 + gap;
-      const startX = cx - totalW / 2;
-      const btnY = canvasHeight * 0.78;
+      const btnW = canvasWidth * 0.34;
+      const btnH = canvasHeight * 0.055;
+      const gap = s(8);
+      const btn1X = cx - gap - btnW;
+      const btn2X = cx + gap;
+      const btnY = canvasHeight * 0.82;
 
-      // 왼쪽: Retry
-      if (hitTest(x, y, startX, btnY, btnW, btnH)) {
+      // 다시하기
+      if (hitTest(x, y, btn1X, btnY, btnW, btnH)) {
         setBtnPressed("result_retry");
         startCountdown();
         return;
       }
-      // 오른쪽: Title
-      if (hitTest(x, y, startX + btnW + gap, btnY, btnW, btnH)) {
+      // 타이틀로
+      if (hitTest(x, y, btn2X, btnY, btnW, btnH)) {
         setBtnPressed("result_title");
         resetToTitle();
+        return;
+      }
+      // 기록 보기
+      const linkY = btnY + btnH + s(10);
+      const linkW = canvasWidth * 0.3;
+      const linkH = s(30);
+      if (hitTest(x, y, cx - linkW / 2, linkY, linkW, linkH)) {
+        gameState = "ranking";
         return;
       }
     }
@@ -1745,8 +1912,11 @@ function handlePlayingInput(x, y) {
     spawnFloatingText(x, y, "feverTap");
     comboCount++;
     bgHitPulse = CONFIG.bgHitPulseDuration;
+    if (comboCount >= 10 && comboCount % 10 === 0) triggerMilestone(comboCount);
     playSound("feverTap");
     triggerHaptic(CONFIG.hapticFever);
+    gameStats.feverTaps++; gameStats.totalTaps++;
+    gameStats.maxCombo = Math.max(gameStats.maxCombo, comboCount);
     return;
   }
 
@@ -1780,8 +1950,11 @@ function handlePlayingInput(x, y) {
         spawnFloatingText(cell.centerX, cell.centerY, "basic");
         comboCount++;
     bgHitPulse = CONFIG.bgHitPulseDuration;
+    if (comboCount >= 10 && comboCount % 10 === 0) triggerMilestone(comboCount);
         playSound("basicHit");
         triggerHaptic(CONFIG.hapticBasic);
+        gameStats.basicHits++; gameStats.totalTaps++;
+        gameStats.maxCombo = Math.max(gameStats.maxCombo, comboCount);
       } else if (t.type === "trap") {
         score += CONFIG.scoreTrap;
         if (score < 0) score = 0;
@@ -1802,8 +1975,10 @@ function handlePlayingInput(x, y) {
         spawnJellyRing(t.cellIndex, "trap");
         spawnFloatingText(cell.centerX, cell.centerY, "trap");
         comboCount = 0;
+        clearMilestone();
         playSound("trapHit");
         triggerHaptic(CONFIG.hapticTrap);
+        gameStats.trapHits++; gameStats.totalTaps++;
       } else if (t.type === "timing") {
         const indicatorScale = t.indicatorScale;
         let scoreVal, gaugeVal, textKey, soundKey;
@@ -1850,10 +2025,16 @@ function handlePlayingInput(x, y) {
         spawnFloatingText(cell.centerX, cell.centerY, textKey);
         comboCount++;
     bgHitPulse = CONFIG.bgHitPulseDuration;
+    if (comboCount >= 10 && comboCount % 10 === 0) triggerMilestone(comboCount);
         playSound(soundKey);
         triggerHaptic(textKey === "timingE3" ? CONFIG.hapticTimingE3
                     : textKey === "timingE2" ? CONFIG.hapticTimingE2
                     : CONFIG.hapticTimingE1);
+        if (textKey === "timingE3") gameStats.timingE3++;
+        else if (textKey === "timingE2") gameStats.timingE2++;
+        else gameStats.timingE1++;
+        gameStats.totalTaps++;
+        gameStats.maxCombo = Math.max(gameStats.maxCombo, comboCount);
       } else if (t.type === "slide") {
         // 슬라이드: 터치 시작만 기록, 스와이프 완료 시 판정
         pendingSlideTouch = {
@@ -1874,6 +2055,28 @@ function handlePlayingInput(x, y) {
       }
 
       return; // 한 번에 하나의 타겟만 히트
+    }
+  }
+
+  // 빈 칸 터치 감지 (헛스윙)
+  for (let ci = 0; ci < gridLayout.cells.length; ci++) {
+    const cell = gridLayout.cells[ci];
+    if (x >= cell.x && x <= cell.x + gridLayout.cellSize &&
+        y >= cell.y && y <= cell.y + gridLayout.cellSize) {
+      // 해당 칸에 활성 타겟이 없는지 확인
+      const hasActive = targets.some(t => t.cellIndex === ci && t.state !== "despawning");
+      if (!hasActive) {
+        // 젤리 찌그러짐
+        jellyCellSquish[ci] = { timer: 0, duration: 0.15 };
+        // 회색 연기 파티클
+        spawnWhiffSmoke(cell.centerX, cell.centerY);
+        // 사운드 (콤보 피치 무시)
+        playSoundFixed("whiffHit");
+        // 햅틱
+        triggerHaptic(CONFIG.hapticWhiff);
+        gameStats.emptyTaps++; gameStats.totalTaps++;
+      }
+      break;
     }
   }
 }
@@ -1942,8 +2145,11 @@ function handleSlideSuccess(t, cell) {
   spawnFloatingText(cell.centerX, cell.centerY, "slideSuccess");
   comboCount++;
   bgHitPulse = CONFIG.bgHitPulseDuration;
+  if (comboCount >= 10 && comboCount % 10 === 0) triggerMilestone(comboCount);
   playSound("slideSuccess");
   triggerHaptic(CONFIG.hapticSlideSuccess);
+  gameStats.slideSuccess++; gameStats.totalTaps++;
+  gameStats.maxCombo = Math.max(gameStats.maxCombo, comboCount);
 
   // Fever 게이지 체크
   if (!isFever && !feverIntro && feverGauge >= CONFIG.feverGaugeMax) {
@@ -1968,8 +2174,10 @@ function handleSlideMiss(t, cell) {
   screenShake.rotationDeg = 0;
   spawnFloatingText(cell.centerX, cell.centerY, "slideMiss");
   comboCount = 0;
+  clearMilestone();
   playSound("slideFail");
   triggerHaptic(CONFIG.hapticSlideFail);
+  gameStats.slideFail++; gameStats.totalTaps++;
 }
 
 // 마우스 입력 (슬라이드 대응: mousedown/mouseup)
@@ -2045,6 +2253,11 @@ function startCountdown() {
   bgHitPulse = 0;
   jellyRings = [];
   jellyCellBounce = {};
+  jellyCellSquish = {};
+  clearMilestone();
+  milestonePopinTimer = 0;
+  gameStats = { basicHits:0, trapHits:0, timingE1:0, timingE2:0, timingE3:0, timingMiss:0,
+                slideSuccess:0, slideFail:0, feverTaps:0, maxCombo:0, emptyTaps:0, totalTaps:0 };
   initBgSparkles();
 
   gameState = "countdown";
@@ -2122,14 +2335,62 @@ function showResult() {
   resultTimer = 0;
   resultCountScore = 0;
   resultStarsRevealed = 0;
-  resultPhase = "countup";
+  resultPhase = "sequence";
   resultStarAnimTimers = [0, 0, 0];
   resultStarRotations = [0, 0, 0];
   resultStarParticles = [];
   resultButtonTimer = 0;
   resultScorePopTimer = 0;
   result3StarFlash = 0;
+  resultCountupDone = false;
+  result3StarBurstDone = false;
+  resultStarRays = [null, null, null];
+  resultInputDelay = 3.5;
+
+  // 신기록 판정 (addScore 전에 체크)
+  const prevScores = loadScores();
+  resultIsNewRecord = score > 0 && (prevScores.length === 0 || score > prevScores[0].score);
   addScore(score);
+
+  // 별 수 계산
+  let totalStars = 0;
+  if (score >= CONFIG.star3Threshold) totalStars = 3;
+  else if (score >= CONFIG.star2Threshold) totalStars = 2;
+  else if (score >= CONFIG.star1Threshold) totalStars = 1;
+  const is3Star = totalStars === 3;
+
+  // D-2: 배경 부유 파티클 초기화
+  const pCount = is3Star ? 35 : 18;
+  const bgColors = [THEME.mint, THEME.cream, THEME.peach, THEME.gold];
+  resultBgParticles = [];
+  for (let i = 0; i < pCount; i++) {
+    const useGold = is3Star ? Math.random() < 0.3 : false; // B-2: 금색 비율 30%
+    resultBgParticles.push({
+      baseX: Math.random() * canvasWidth,
+      y: Math.random() * canvasHeight,
+      vy: -(15 + Math.random() * 20),
+      size: s(4 + Math.random() * 8),
+      color: useGold ? THEME.gold : bgColors[Math.floor(Math.random() * bgColors.length)],
+      alpha: 0.15 + Math.random() * 0.2,
+      isStar: Math.random() < 0.3,
+      wobblePhase: Math.random() * Math.PI * 2,
+      wobblePeriod: 2.5 + Math.random() * 1,
+    });
+  }
+
+  // D-2: 반짝임 십자 초기화
+  const spCount = 3 + Math.floor(Math.random() * 3); // B-3: 3~5개로 축소
+  resultSparkles = [];
+  for (let i = 0; i < spCount; i++) {
+    resultSparkles.push({
+      x: s(30) + Math.random() * (canvasWidth - s(60)),
+      y: s(30) + Math.random() * (canvasHeight - s(60)),
+      size: s(2 + Math.random() * 2),
+      period: 1.5 + Math.random() * 1.5,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+
   startBGM("title");
 }
 
@@ -2238,6 +2499,36 @@ function updateEffectsOnly(dt) {
     const jb = jellyCellBounce[ci];
     jb.timer += dt;
     if (jb.timer >= jb.duration) delete jellyCellBounce[ci];
+  }
+  // 젤리 셀 찌그러짐 업데이트
+  for (const ci in jellyCellSquish) {
+    const js = jellyCellSquish[ci];
+    js.timer += dt;
+    if (js.timer >= js.duration) delete jellyCellSquish[ci];
+  }
+  // 마일스톤 텍스트 업데이트
+  if (milestonePhase !== 'idle') {
+    if (milestonePhase === 'popin') {
+      milestonePopinTimer += dt;
+      const p = clamp(milestonePopinTimer / 0.15, 0, 1);
+      milestoneScale = lerp(0, 1.4, easeOutBack(p));
+      if (p >= 1) {
+        milestoneScale = 1.0;
+        milestonePhase = 'hold';
+      }
+    }
+    if (milestonePhase === 'hold') {
+      milestoneTimer -= dt;
+      if (milestoneTimer <= 0) {
+        milestonePhase = 'fadeout';
+      }
+    }
+    if (milestonePhase === 'fadeout') {
+      milestoneAlpha -= dt / 0.3;
+      if (milestoneAlpha <= 0) {
+        clearMilestone();
+      }
+    }
   }
   // 화면 흔들림
   if (screenShake.active) {
@@ -2432,6 +2723,7 @@ function update(dt) {
             // 미스: 패널티 없이 사라짐
             t.state = "despawning";
             t.stateTimer = 0;
+            gameStats.timingMiss++;
             const cell = gridLayout.cells[t.cellIndex];
             spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
           }
@@ -2440,6 +2732,7 @@ function update(dt) {
         if (!t._stillMode && t.indicatorScale <= 0) {
           t.state = "despawning";
           t.stateTimer = 0;
+          gameStats.timingMiss++;
           const cell = gridLayout.cells[t.cellIndex];
           spawnDustPuff(cell.centerX, cell.y + gridLayout.cellSize, 3);
         }
@@ -2571,6 +2864,36 @@ function update(dt) {
     jb.timer += dt;
     if (jb.timer >= jb.duration) delete jellyCellBounce[ci];
   }
+  for (const ci in jellyCellSquish) {
+    const js = jellyCellSquish[ci];
+    js.timer += dt;
+    if (js.timer >= js.duration) delete jellyCellSquish[ci];
+  }
+
+  // ★ 마일스톤 텍스트 업데이트 (메인 update에 추가)
+  if (milestonePhase !== 'idle') {
+    if (milestonePhase === 'popin') {
+      milestonePopinTimer += dt;
+      const p = clamp(milestonePopinTimer / 0.15, 0, 1);
+      milestoneScale = lerp(0, 1.4, easeOutBack(p));
+      if (p >= 1) {
+        milestoneScale = 1.0;
+        milestonePhase = 'hold';
+      }
+    }
+    if (milestonePhase === 'hold') {
+      milestoneTimer -= dt;
+      if (milestoneTimer <= 0) {
+        milestonePhase = 'fadeout';
+      }
+    }
+    if (milestonePhase === 'fadeout') {
+      milestoneAlpha -= dt / 0.3;
+      if (milestoneAlpha <= 0) {
+        clearMilestone();
+      }
+    }
+  }
 
   // 화면 흔들림 업데이트
   if (screenShake.active) {
@@ -2593,12 +2916,18 @@ function updateResult(dt) {
   if (gameState !== "result") return;
   resultTimer += dt;
 
+  // 입력 딜레이 카운트다운
+  if (resultInputDelay > 0) {
+    resultInputDelay -= dt;
+    if (resultInputDelay < 0) resultInputDelay = 0;
+  }
+
   let totalStars = 0;
   if (score >= CONFIG.star3Threshold) totalStars = 3;
   else if (score >= CONFIG.star2Threshold) totalStars = 2;
   else if (score >= CONFIG.star1Threshold) totalStars = 1;
 
-  // 카운트업 완료 시 팽창 타이머
+  // 점수 팝 타이머
   if (resultScorePopTimer > 0) {
     resultScorePopTimer -= dt;
     if (resultScorePopTimer < 0) resultScorePopTimer = 0;
@@ -2610,13 +2939,33 @@ function updateResult(dt) {
     if (result3StarFlash < 0) result3StarFlash = 0;
   }
 
-  // 별 애니메이션 타이머 업데이트
+  // 별 애니메이션 타이머
   for (let i = 0; i < 3; i++) {
     if (resultStarAnimTimers[i] > 0 && resultStarAnimTimers[i] < 1) {
-      resultStarAnimTimers[i] += dt / 0.5; // 0.5초간 애니메이션
+      const prev = resultStarAnimTimers[i];
+      resultStarAnimTimers[i] += dt / 0.5;
       if (resultStarAnimTimers[i] > 1) resultStarAnimTimers[i] = 1;
-      // 회전 보간
-      resultStarRotations[i] = Math.PI * 2 * clamp(resultStarAnimTimers[i], 0, 1);
+      resultStarRotations[i] = -Math.PI * (1 - clamp(resultStarAnimTimers[i], 0, 1)); // B-4: 180도 회전 후 0으로 안정
+      // C-3: 별이 scale 1.0 도달 순간 광선 발사
+      if (prev < 1 && resultStarAnimTimers[i] >= 1 && !resultStarRays[i]) {
+        const cx = canvasWidth / 2;
+        const starSpacing = canvasWidth * 0.13;
+        resultStarRays[i] = {
+          timer: 0,
+          x: cx + (i - 1) * starSpacing,
+          y: canvasHeight * 0.15,
+          size: canvasWidth * 0.05, // A-6: outerR 기준
+        };
+      }
+    }
+    // ★ 별 회전 보정: timer가 1에 도달하면 정확히 0도로 리셋
+    if (resultStarAnimTimers[i] >= 1) {
+      resultStarRotations[i] = 0;
+    }
+    // 광선 타이머 업데이트
+    if (resultStarRays[i]) {
+      resultStarRays[i].timer += dt;
+      if (resultStarRays[i].timer >= 0.25) resultStarRays[i] = null;
     }
   }
 
@@ -2627,79 +2976,92 @@ function updateResult(dt) {
     if (p.life <= 0) { resultStarParticles.splice(i, 1); continue; }
     p.x += p.vx * dt;
     p.y += p.vy * dt;
-    p.vy += 200 * dt; // gravity
+    p.vy += 200 * dt;
     p.rotation += p.spin * dt;
   }
 
-  // 버튼 등장 타이머
-  if (resultButtonTimer > 0) {
-    resultButtonTimer += dt;
+  // 배경 부유 파티클 업데이트
+  for (const p of resultBgParticles) {
+    p.y += p.vy * dt;
+    if (p.y < -s(20)) {
+      p.y = canvasHeight + s(20);
+      p.baseX = Math.random() * canvasWidth;
+    }
   }
 
-  if (resultPhase === "countup") {
-    // 1초간 0 → 최종 점수 카운트업
-    const countDuration = 1.0;
-    const progress = clamp(resultTimer / countDuration, 0, 1);
-    const eased = easeOutQuad(progress);
-    const prevScore = resultCountScore;
-    resultCountScore = Math.floor(score * eased);
+  if (resultPhase === "sequence") {
+    // D-7 타이밍 시퀀스: 별 → 등급 → 점수카드 → 통계 → 버튼
 
-    // 별 기준점 통과 시 파티클
-    if (prevScore < CONFIG.star1Threshold && resultCountScore >= CONFIG.star1Threshold) {
-      spawnResultScoreParticles(4, THEME.mint);
-    } else if (prevScore < CONFIG.star2Threshold && resultCountScore >= CONFIG.star2Threshold) {
-      spawnResultScoreParticles(8, "#E8C840");
-    } else if (prevScore < CONFIG.star3Threshold && resultCountScore >= CONFIG.star3Threshold) {
-      spawnResultScoreParticles(12, THEME.gold);
-    }
-
-    if (progress >= 1) {
-      resultCountScore = score;
-      resultScorePopTimer = 0.3;
-      resultPhase = "stars";
-      resultTimer = 0;
-    }
-  } else if (resultPhase === "stars") {
-    // 0.4초 간격으로 별 하나씩 공개 (순차)
+    // 별: 0.0~1.2초 (0.4초 간격)
     const revealInterval = 0.4;
-    const shouldReveal = Math.floor(resultTimer / revealInterval) + 1;
+    const shouldReveal = Math.min(Math.floor(resultTimer / revealInterval) + 1, 3);
     if (shouldReveal > resultStarsRevealed && resultStarsRevealed < totalStars) {
       const newStar = Math.min(shouldReveal, totalStars);
       for (let i = resultStarsRevealed; i < newStar; i++) {
-        resultStarAnimTimers[i] = 0.01; // 애니메이션 시작
-        // 별 등장 효과음 (도, 미, 솔)
+        resultStarAnimTimers[i] = 0.01;
         playSound("starReveal" + (i + 1));
-        // 별 위치에 금색 파티클 폭발
         const cx = canvasWidth / 2;
-        const starX = cx + (i - 1) * s(60);
-        const starY = canvasHeight * 0.45;
+        const starSpacing = canvasWidth * 0.13;
+        const starX = cx + (i - 1) * starSpacing;
+        const starY = canvasHeight * 0.15;
         spawnStarBurstParticles(starX, starY, 10 + i * 4);
+        // B-1: 별 1개당 1회 플래시 (약하게)
+        result3StarFlash = 0.1;
       }
       resultStarsRevealed = newStar;
     }
 
-    // 3성 마지막 별 등장 후 대폭발
-    if (totalStars === 3 && resultStarsRevealed === 3 && result3StarFlash === 0 &&
+    // 3성 대폭발: 플래시 제거, 파티클만 증가
+    if (totalStars === 3 && resultStarsRevealed === 3 && !result3StarBurstDone &&
         resultTimer >= 3 * revealInterval + 0.1 && resultStarAnimTimers[2] >= 0.8) {
-      result3StarFlash = 0.15;
+      result3StarBurstDone = true;
       playSound("star3Burst");
-      // 금색 대폭발 파티클
-      const cx = canvasWidth / 2;
-      spawnStarBurstParticles(cx, canvasHeight * 0.45, 40);
+      spawnStarBurstParticles(canvasWidth / 2, canvasHeight * 0.15, 20);
     }
 
-    if (resultTimer >= totalStars * revealInterval + 0.8) {
-      resultStarsRevealed = totalStars;
+    // 점수 카운트업: 1.6~2.6초
+    if (resultTimer >= 1.6) {
+      const countProgress = clamp((resultTimer - 1.6) / 1.0, 0, 1);
+      const eased = easeOutQuad(countProgress);
+      const prevScore = resultCountScore;
+      resultCountScore = Math.floor(score * eased);
+
+      if (prevScore < CONFIG.star1Threshold && resultCountScore >= CONFIG.star1Threshold) {
+        spawnResultScoreParticles(4, THEME.mint);
+      } else if (prevScore < CONFIG.star2Threshold && resultCountScore >= CONFIG.star2Threshold) {
+        spawnResultScoreParticles(8, "#E8C840");
+      } else if (prevScore < CONFIG.star3Threshold && resultCountScore >= CONFIG.star3Threshold) {
+        spawnResultScoreParticles(12, THEME.gold);
+      }
+
+      if (countProgress >= 1 && !resultCountupDone) {
+        resultCountScore = score;
+        resultScorePopTimer = 0.3;
+        resultCountupDone = true;
+      }
+    }
+
+    // 3.5초 후 done
+    if (resultTimer >= 3.5) {
       resultPhase = "done";
-      resultTimer = 0;
-      resultButtonTimer = 0.01; // 버튼 등장 시작
+      resultStarsRevealed = totalStars;
+      for (let i = 0; i < totalStars; i++) {
+        if (resultStarAnimTimers[i] < 1) {
+          resultStarAnimTimers[i] = 1;
+          resultStarRotations[i] = 0; // B-4: 애니메이션 완료 시 0도
+        }
+      }
+      if (!resultCountupDone) {
+        resultCountScore = score;
+        resultCountupDone = true;
+      }
     }
   }
 }
 
 function spawnResultScoreParticles(count, color) {
   const cx = canvasWidth / 2;
-  const y = canvasHeight * 0.31;
+  const y = canvasHeight * 0.35 + canvasHeight * 0.18 * 0.58;
   for (let i = 0; i < count; i++) {
     const angle = (Math.PI * 2 * i) / count;
     const speed = 60 + Math.random() * 80;
@@ -2719,10 +3081,17 @@ function spawnResultScoreParticles(count, color) {
 }
 
 function spawnStarBurstParticles(cx, cy, count) {
-  const colors = [THEME.gold, "#FFC107", "#FFF8E1", THEME.cream, "#FFE082"];
+  // B-2: 금색 40% + 민트 30% + 흰색 30% 혼합
+  const goldColors = [THEME.gold, "#FFC107", "#FFE082"];
+  const mintColors = [THEME.mint, THEME.mintLight];
+  const whiteColors = ["#FFFFFF", "#FFF8F0"];
   for (let i = 0; i < count; i++) {
     const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
     const speed = 80 + Math.random() * 150;
+    const r = Math.random();
+    const color = r < 0.4 ? goldColors[Math.floor(Math.random() * goldColors.length)]
+                : r < 0.7 ? mintColors[Math.floor(Math.random() * mintColors.length)]
+                : whiteColors[Math.floor(Math.random() * whiteColors.length)];
     resultStarParticles.push({
       x: cx + (Math.random() - 0.5) * s(10),
       y: cy + (Math.random() - 0.5) * s(10),
@@ -2731,7 +3100,7 @@ function spawnStarBurstParticles(cx, cy, count) {
       life: 0.5 + Math.random() * 0.5,
       maxLife: 0.8,
       size: 2 + Math.random() * 3,
-      color: colors[i % colors.length],
+      color: color,
       rotation: Math.random() * Math.PI * 2,
       spin: (Math.random() - 0.5) * 12,
     });
@@ -3076,6 +3445,7 @@ function renderPlaying() {
 
   // HUD는 흔들림 없이 먼저 렌더링
   renderHUD();
+  drawMilestone(ctx);
 
   // 그리드 영역에만 흔들림 적용
   if (screenShake.active) {
@@ -3171,6 +3541,61 @@ function renderPlaying() {
     ctx.globalAlpha = 1;
     ctx.restore();
   }
+}
+
+function drawMilestone(ctx) {
+  if (milestonePhase === 'idle' || milestoneNumber === 0) return;
+
+  ctx.save();
+  ctx.globalAlpha = milestoneAlpha;
+
+  const text = milestoneNumber + ' COMBO!';
+  const fontSize = canvasWidth * 0.10;
+  ctx.font = `${fontSize}px "Black Han Sans"`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const x = canvasWidth / 2;
+  let y = canvasHeight * 0.16;
+
+  // 페이드아웃 중이면 위로 떠오름
+  if (milestonePhase === 'fadeout') {
+    y -= (1 - milestoneAlpha) * 20;
+  }
+
+  // scale 적용
+  ctx.translate(x, y);
+  ctx.scale(milestoneScale, milestoneScale);
+
+  // 색상 (구간별)
+  let color;
+  if (milestoneNumber >= 50) {
+    const hue = (Date.now() / 10) % 360;
+    color = 'hsl(' + hue + ', 80%, 55%)';
+  } else if (milestoneNumber >= 40) {
+    color = THEME.gold;
+  } else if (milestoneNumber >= 30) {
+    color = THEME.coral;
+  } else if (milestoneNumber >= 20) {
+    color = THEME.gold;
+  } else {
+    color = THEME.mintDark;
+  }
+
+  // 글로우
+  ctx.shadowColor = 'rgba(255,255,255,0.8)';
+  ctx.shadowBlur = 6;
+
+  // 외곽선 (가독성)
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 3;
+  ctx.strokeText(text, 0, 0);
+
+  // 메인 텍스트
+  ctx.fillStyle = color;
+  ctx.fillText(text, 0, 0);
+
+  ctx.restore();
 }
 
 function renderHUD() {
@@ -3343,16 +3768,44 @@ function renderHUD() {
     const comboY = barY + barHeight + s(14);
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    const isHighCombo = comboCount >= 10;
-    if (isHighCombo) {
-      ctx.save();
-      ctx.shadowColor = THEME.gold;
-      ctx.shadowBlur = s(6);
+
+    let comboFontScale = 1.0;
+    let comboGlowBlur = 0;
+    let comboColor = THEME.textSecondary;
+    const now = Date.now() / 1000;
+
+    if (comboCount >= 30) {
+      comboFontScale = 1.2;
+      comboGlowBlur = s(8);
+      // 코랄/금 깜빡임 (0.3초 주기)
+      const flick = Math.sin(now * (Math.PI * 2 / 0.3));
+      comboColor = flick > 0 ? THEME.coral : THEME.gold;
+    } else if (comboCount >= 20) {
+      comboFontScale = 1.2;
+      comboGlowBlur = s(6);
+      comboColor = THEME.gold;
+    } else if (comboCount >= 10) {
+      comboFontScale = 1.15;
+      comboGlowBlur = s(4);
+      comboColor = THEME.gold;
     }
-    ctx.fillStyle = isHighCombo ? THEME.gold : THEME.textSecondary;
-    ctx.font = `bold ${s(14)}px ${FONT.number}`;
+
+    // 10+ 맥박
+    let comboPulse = 1.0;
+    if (comboCount >= 10) {
+      comboPulse = 1.0 + 0.05 * Math.sin(now * (Math.PI * 2 / 0.5));
+    }
+
+    const comboSize = s(14) * comboFontScale * comboPulse;
+    ctx.save();
+    if (comboCount >= 10) {
+      ctx.shadowColor = THEME.gold;
+      ctx.shadowBlur = comboGlowBlur;
+    }
+    ctx.fillStyle = comboColor;
+    ctx.font = `bold ${comboSize}px ${FONT.number}`;
     ctx.fillText(`${comboCount} COMBO`, comboX, comboY);
-    if (isHighCombo) ctx.restore();
+    ctx.restore();
   }
 }
 
@@ -3435,6 +3888,15 @@ function renderGrid() {
         : 0.8 + (1.0 - 0.8) * easeOutQuad((bp - 0.5) * 2); // 0.8→1.0
       jScaleX *= bounceScale;
       jScaleY *= bounceScale;
+    }
+
+    // 빈 칸 헛스윙 찌그러짐
+    const squish = jellyCellSquish[ci];
+    if (squish) {
+      const sp = clamp(squish.timer / squish.duration, 0, 1);
+      const recovery = easeOutBack(sp);
+      jScaleX *= 1.1 - 0.1 * recovery;   // 1.1 → 1.0
+      jScaleY *= 0.85 + 0.15 * recovery;  // 0.85 → 1.0
     }
 
     // 젤리 그리기
@@ -4532,51 +4994,175 @@ function drawTimeupCharacter(cx, cy) {
   ctx.restore();
 }
 
+// B-3: 별 path 헬퍼 (fill/stroke 하지 않음, 12시 방향 시작)
+function createStarPath(ctx, cx, cy, outerR, innerR, points) {
+  ctx.beginPath();
+  for (var i = 0; i < points * 2; i++) {
+    var r = (i % 2 === 0) ? outerR : innerR;
+    var angle = (i * Math.PI / points) - (Math.PI / 2);
+    var x = cx + r * Math.cos(angle);
+    var y = cy + r * Math.sin(angle);
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  ctx.closePath();
+}
+
+// B-6: 결과 화면 전용 별 렌더링 (ctx 파라미터 포함, 회전 없음)
+function drawResultStar(ctx, cx, cy, size, earned) {
+  var outerR = size;
+  var innerR = size * 0.4;
+
+  if (earned) {
+    // 레이어 1: 드롭 섀도우
+    ctx.save();
+    ctx.shadowColor = 'rgba(180, 140, 20, 0.35)';
+    ctx.shadowBlur = size * 0.4;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = size * 0.1;
+    createStarPath(ctx, cx, cy, outerR, innerR, 5);
+    ctx.fillStyle = '#FFD700';
+    ctx.fill();
+    ctx.restore();
+
+    // 레이어 2: 메인 채움 (방사형 그라데이션)
+    ctx.save();
+    var grad = ctx.createRadialGradient(
+      cx, cy - size * 0.15, size * 0.1,
+      cx, cy, size
+    );
+    grad.addColorStop(0, '#FFF0A0');
+    grad.addColorStop(0.5, '#FFD700');
+    grad.addColorStop(1, '#DAA520');
+    createStarPath(ctx, cx, cy, outerR, innerR, 5);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+
+    // 레이어 3: 테두리
+    ctx.save();
+    createStarPath(ctx, cx, cy, outerR, innerR, 5);
+    ctx.strokeStyle = '#B8860B';
+    ctx.lineWidth = Math.max(1.5, size * 0.04);
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.restore();
+
+    // 레이어 4: 상단 광택 (별 형태 안에서만)
+    ctx.save();
+    createStarPath(ctx, cx, cy, outerR, innerR, 5);
+    ctx.clip();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - size * 0.25, size * 0.5, size * 0.3, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.fill();
+    ctx.restore();
+  } else {
+    // 미획득 별: 채움
+    ctx.save();
+    createStarPath(ctx, cx, cy, outerR, innerR, 5);
+    ctx.fillStyle = 'rgba(220, 220, 215, 0.4)';
+    ctx.fill();
+    ctx.restore();
+
+    // 미획득 별: 테두리
+    ctx.save();
+    createStarPath(ctx, cx, cy, outerR, innerR, 5);
+    ctx.strokeStyle = 'rgba(195, 195, 190, 0.5)';
+    ctx.lineWidth = Math.max(1, size * 0.03);
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// A-7: 별 등장 대각선 광선 렌더링
+function renderStarRays() {
+  for (let i = 0; i < 3; i++) {
+    const ray = resultStarRays[i];
+    if (!ray) continue;
+    const p = ray.timer / 0.25;
+    const alpha = 0.5 * (1 - p);
+    const len = ray.size * (0.6 + 0.6 * p); // A-7: 0.6→1.2
+    const lineW = s(1.5) * (1 - p * 0.67); // 1.5px → 0.5px
+
+    ctx.save();
+    ctx.translate(ray.x, ray.y);
+    ctx.strokeStyle = `rgba(255, 215, 0, ${alpha})`;
+    ctx.lineWidth = lineW;
+    ctx.lineCap = 'round';
+
+    for (let a = 0; a < 4; a++) {
+      const angle = (Math.PI / 4) + (Math.PI / 2) * a;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle) * ray.size * 0.3, Math.sin(angle) * ray.size * 0.3);
+      ctx.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 // ---- Result 화면 ----
 function renderResult() {
   const cx = canvasWidth / 2;
   const now = Date.now() / 1000;
+  const t = resultTimer;
+  const isDone = resultPhase === "done";
   let totalStars = 0;
   if (score >= CONFIG.star3Threshold) totalStars = 3;
   else if (score >= CONFIG.star2Threshold) totalStars = 2;
   else if (score >= CONFIG.star1Threshold) totalStars = 1;
+  const is3Star = totalStars === 3;
 
-  // 어두운 오버레이
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  // D-2: 배경 그라데이션 (크림 → 민트)
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+  bgGrad.addColorStop(0, THEME.cream);
+  bgGrad.addColorStop(1, '#E8F8F5');
+  ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  // 배경 부유 반짝임
-  const sparkleBase = totalStars >= 3 && resultStarsRevealed >= 3 ? 30 : 10;
-  for (let i = 0; i < sparkleBase; i++) {
-    const sx = ((now * 0.015 + i * 0.083) % 1.0) * canvasWidth;
-    const sy = (1.0 - ((now * 0.025 * (0.3 + i * 0.07) + i * 0.09) % 1.0)) * canvasHeight;
-    const sa = 0.12 + 0.08 * Math.sin(now * 2.5 + i * 1.5);
-    ctx.globalAlpha = sa;
-    ctx.fillStyle = i % 3 === 0 ? THEME.gold : (i % 3 === 1 ? "#C0C0C0" : THEME.mintLight);
-    ctx.beginPath();
-    ctx.arc(sx, sy, s(1.5 + Math.sin(now + i) * 0.5), 0, Math.PI * 2);
-    ctx.fill();
+  // D-2: 부유 파티클
+  for (const p of resultBgParticles) {
+    const px = p.baseX + Math.sin(now * (Math.PI * 2 / p.wobblePeriod) + p.wobblePhase) * s(10);
+    ctx.globalAlpha = p.alpha;
+    if (p.isStar) {
+      drawStar5(px, p.y, p.size * 0.5, p.color);
+    } else {
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(px, p.y, p.size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.globalAlpha = 1;
 
-  // 결과 카드
-  const cardW = canvasWidth - s(32);
-  const cardH = canvasHeight * 0.6;
-  const cardX = (canvasWidth - cardW) / 2;
-  const cardY = canvasHeight * 0.10;
-  drawPanel(cardX, cardY, cardW, cardH, { cornerRadius: s(20) });
+  // D-2: 반짝임 십자
+  for (const sp of resultSparkles) {
+    const a = 0.15 + 0.25 * Math.sin(now * (Math.PI * 2 / sp.period) + sp.phase); // B-3: 최대 0.4
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = s(1);
+    ctx.beginPath();
+    ctx.moveTo(sp.x - sp.size, sp.y);
+    ctx.lineTo(sp.x + sp.size, sp.y);
+    ctx.moveTo(sp.x, sp.y - sp.size);
+    ctx.lineTo(sp.x, sp.y + sp.size);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 
-  // B-4: 별 파티클 렌더링
+  // 별 파티클 렌더링
   for (const p of resultStarParticles) {
-    const alpha = clamp(p.life / p.maxLife, 0, 1);
+    const alpha = clamp(p.life / p.maxLife, 0, 0.5); // B-2: 투명도 상한 0.5
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(p.rotation);
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = p.color;
-    // 작은 별 모양
-    const sz = s(p.size) * alpha;
-    drawStar5(0, 0, sz, p.color, true);
+    drawStar5(0, 0, s(p.size) * alpha, p.color, true);
     ctx.globalAlpha = 1;
     ctx.restore();
   }
@@ -4584,111 +5170,45 @@ function renderResult() {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  // 결과 타이틀 (카드 상단)
-  const titleY = cardY + s(30);
-  ctx.fillStyle = THEME.mintDark;
-  ctx.font = `bold ${s(26)}px ${FONT.text}`;
-  ctx.fillText("Result", cx, titleY);
-
-  // "SCORE" 라벨
-  ctx.fillStyle = THEME.textSecondary;
-  ctx.font = `bold ${s(14)}px ${FONT.text}`;
-  ctx.fillText("SCORE", cx, canvasHeight * 0.22);
-
-  // B-2: 점수 카운트업 (스케일 바운스 + 구간별 색상 변화)
-  const baseFontSize = s(56);
-  let scoreScale = 1.0;
-  if (resultPhase === "countup") {
-    // 카운트 중 미세 바운스 (1.0 ↔ 1.05)
-    scoreScale = 1.0 + 0.05 * Math.abs(Math.sin(resultTimer * 8));
-  } else if (resultScorePopTimer > 0) {
-    // 카운트 완료 시 팽창 (1.0 → 1.3 → 1.0)
-    const popP = resultScorePopTimer / 0.3;
-    scoreScale = 1.0 + 0.3 * Math.sin(popP * Math.PI);
-  }
-  const scoreSize = baseFontSize * scoreScale;
-  ctx.font = `bold ${scoreSize}px ${FONT.number}`;
-  const scoreY = canvasHeight * 0.31;
-
-  ctx.fillStyle = "rgba(74, 74, 74, 0.1)";
-  ctx.fillText(resultCountScore.toLocaleString(), cx + s(2), scoreY + s(3));
-
-  // B-2: 구간별 색상 변화
-  const scoreVal = resultCountScore;
-  let scoreColor = THEME.textPrimary;
-  if (scoreVal >= CONFIG.star3Threshold) scoreColor = THEME.gold;
-  else if (scoreVal >= CONFIG.star2Threshold) scoreColor = "#E8C840";
-  else if (scoreVal >= CONFIG.star1Threshold) scoreColor = THEME.mint;
-  ctx.fillStyle = scoreColor;
-  ctx.fillText(resultCountScore.toLocaleString(), cx, scoreY);
-
-  ctx.globalAlpha = 0.12 + 0.08 * Math.sin(now * 3);
-  ctx.fillStyle = "#FFFFFF";
-  ctx.fillText(resultCountScore.toLocaleString(), cx, scoreY - s(1));
-  ctx.globalAlpha = 1;
-
-  // B-1: 별 등급 (순차 등장 + 바운스 + 회전 + 파티클)
-  const starY = canvasHeight * 0.45;
-  const starSpacing = s(60);
-  const starBaseSize = s(24);
+  // D-3: 별 등급 영역 (상단 15%)
+  const starY = canvasHeight * 0.15;
+  const starSpacing = canvasWidth * 0.13; // C-4: 간격 0.13
+  const starBaseSize = canvasWidth * 0.05; // A-6: outerR = 0.05 (지름 0.10)
 
   for (let i = 0; i < 3; i++) {
     const starX = cx + (i - 1) * starSpacing;
     const earned = i < resultStarsRevealed;
     const animT = resultStarAnimTimers[i];
 
-    if (!earned && resultPhase !== "done") {
-      // 미획득 + 아직 진행 중: 작은 빈 별
-      const sz = starBaseSize * 0.8;
-      drawStar5(starX, starY, sz, false, i);
-      continue;
-    }
-
     if (!earned) {
-      // done 상태에서 미획득 별
-      drawStar5(starX, starY, starBaseSize * 0.8, false, i);
+      // C-2: 미획득 별
+      drawResultStar(ctx, starX, starY, starBaseSize * 0.8, false);
       continue;
     }
 
-    // B-1: 바운스 스케일 (0 → 1.5 → 1.0)
+    // 획득 별 바운스 스케일
     let starScale = 1;
     if (animT > 0 && animT < 1) {
-      const t = animT;
-      if (t < 0.4) {
-        starScale = lerp(0, 1.5, easeOutBack(t / 0.4));
-      } else {
-        starScale = lerp(1.5, 1.0, (t - 0.4) / 0.6);
-      }
+      if (animT < 0.4) starScale = lerp(0, 1.5, easeOutBack(animT / 0.4));
+      else starScale = lerp(1.5, 1.0, (animT - 0.4) / 0.6);
     }
-
     const sz = starBaseSize * starScale;
-    const rotation = resultStarRotations[i];
 
-    // 획득한 별: 글로우
-    const glowAlpha = 0.15 + 0.08 * Math.sin(now * 3 + i * 1.2);
-    ctx.globalAlpha = glowAlpha * (animT > 0 ? Math.min(animT * 3, 1) : 1);
-    ctx.fillStyle = THEME.gold;
-    ctx.beginPath();
-    ctx.arc(starX, starY, sz * 1.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    // B-1: 회전 적용하여 별 렌더링
+    // 회전 + C-2 별 렌더링
     ctx.save();
     ctx.translate(starX, starY);
-    ctx.rotate(rotation);
-    drawStar5(0, 0, sz, true, i);
+    ctx.rotate(resultStarRotations[i]);
+    drawResultStar(ctx, 0, 0, sz, true);
     ctx.restore();
 
-    // 획득한 별 위 반짝임
-    if (animT >= 1 || resultPhase === "done") {
+    // 획득 별 반짝임
+    if (animT >= 1 || isDone) {
       for (let sp = 0; sp < 2; sp++) {
         const angle = now * 2.5 + i * 2.1 + sp * Math.PI;
         const dist = sz * (0.6 + 0.3 * Math.sin(now * 1.8 + sp * 3));
         const spX = starX + Math.cos(angle) * dist;
         const spY = starY + Math.sin(angle) * dist;
-        const spAlpha = 0.4 + 0.3 * Math.sin(now * 4 + i + sp * 2);
-        ctx.globalAlpha = spAlpha;
+        ctx.globalAlpha = 0.4 + 0.3 * Math.sin(now * 4 + i + sp * 2);
         ctx.fillStyle = THEME.gold;
         ctx.beginPath();
         ctx.arc(spX, spY, s(1.5), 0, Math.PI * 2);
@@ -4698,83 +5218,290 @@ function renderResult() {
     }
   }
 
-  // 등급 텍스트
-  if (resultPhase === "done" || (resultPhase === "stars" && resultStarsRevealed >= totalStars)) {
-    const gradeTexts = ["Try Again!", "Good!", "Great!", "Perfect!"];
-    const gradeY = canvasHeight * 0.55;
-    const gradeFontSize = s(24);
-    ctx.font = `bold ${gradeFontSize}px ${FONT.text}`;
-    ctx.fillStyle = "rgba(74, 74, 74, 0.15)";
-    ctx.fillText(gradeTexts[totalStars], cx + s(1), gradeY + s(2));
+  // C-3: 별 등장 광선 렌더링
+  renderStarRays();
 
-    if (totalStars === 0) {
-      ctx.fillStyle = THEME.textSecondary;
-    } else if (totalStars === 1) {
-      ctx.fillStyle = THEME.mint;
-    } else if (totalStars === 2) {
-      ctx.fillStyle = THEME.mintDark;
+  // D-3: 등급 텍스트 (t=1.4초부터)
+  const gradeElapsed = t - 1.4;
+  if (gradeElapsed > 0 || isDone) {
+    const gradeTexts = ["TRY AGAIN...", "GOOD!", "GREAT!", "EXCELLENT!"];
+    const gradeY = starY + starBaseSize + s(25);
+    const gradeFontSize = canvasWidth * 0.06;
+
+    const ge = isDone ? 1 : clamp(gradeElapsed / 0.3, 0, 1);
+    const gradeScale = easeOutBack(ge);
+
+    ctx.save();
+    ctx.translate(cx, gradeY);
+    ctx.scale(gradeScale, gradeScale);
+    ctx.font = `bold ${gradeFontSize}px ${FONT.number}`;
+    ctx.shadowColor = '#FFFFFF';
+    ctx.shadowBlur = s(8);
+
+    if (is3Star) {
+      const hue = ((now * 180) % 360);
+      ctx.fillStyle = `hsl(${hue}, 80%, 55%)`;
     } else {
-      const gGrad = ctx.createLinearGradient(cx - s(50), gradeY - s(12), cx + s(50), gradeY + s(12));
-      gGrad.addColorStop(0, "#FFF8E1");
-      gGrad.addColorStop(0.3, THEME.gold);
-      gGrad.addColorStop(0.7, "#FFC107");
-      gGrad.addColorStop(1, "#FFF8E1");
-      ctx.fillStyle = gGrad;
+      const gradeColors = [THEME.textSecondary, THEME.mintDark, THEME.mint, THEME.gold];
+      ctx.fillStyle = gradeColors[totalStars];
     }
-    ctx.fillText(gradeTexts[totalStars], cx, gradeY);
+    ctx.fillText(gradeTexts[totalStars], 0, 0);
+    ctx.restore();
   }
 
-  // NEW RECORD 표시
-  if (resultPhase === "done") {
-    const scores = JSON.parse(localStorage.getItem("whack_scores") || "[]");
-    const isNewRecord = scores.length === 0 || score > scores[0];
-    if (isNewRecord && score > 0) {
-      const nrY = canvasHeight * 0.60;
-      ctx.save();
+  // D-4: 점수 카드 (t=1.6초부터)
+  const scElapsed = t - 1.6;
+  if (scElapsed > 0 || isDone) {
+    const scAlpha = isDone ? 1 : clamp(scElapsed / 0.3, 0, 1);
+    const scW = canvasWidth * 0.75;
+    const scH = canvasHeight * 0.18;
+    const scX = cx - scW / 2;
+    const scY = canvasHeight * 0.35;
+
+    ctx.globalAlpha = scAlpha;
+
+    // 카드 패널
+    ctx.save();
+    if (is3Star) {
       ctx.shadowColor = THEME.gold;
-      ctx.shadowBlur = s(8 + 4 * Math.sin(now * 4));
+      ctx.shadowBlur = s(15);
+    } else {
+      ctx.shadowColor = 'rgba(126, 206, 192, 0.2)';
+      ctx.shadowBlur = s(10);
+    }
+    ctx.shadowOffsetY = s(4);
+    drawRoundedRect(scX, scY, scW, scH, s(20));
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = is3Star ? THEME.gold : 'rgba(126, 206, 192, 0.3)';
+    ctx.lineWidth = is3Star ? s(2) : 1;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.globalAlpha = scAlpha;
+
+    // "SCORE" 라벨
+    ctx.fillStyle = THEME.mintDark;
+    ctx.font = `${canvasWidth * 0.035}px ${FONT.text}`;
+    ctx.save();
+    try { ctx.letterSpacing = '3px'; } catch(e) {}
+    ctx.fillText("SCORE", cx, scY + scH * 0.28);
+    try { ctx.letterSpacing = '0px'; } catch(e) {}
+    ctx.restore();
+
+    // 점수 숫자
+    let scoreScale = 1.0;
+    const countActive = scElapsed > 0 && scElapsed < 1.0 && !resultCountupDone;
+    if (countActive) {
+      scoreScale = 1.0 + 0.05 * Math.abs(Math.sin(now * 8));
+    } else if (resultScorePopTimer > 0) {
+      const popP = resultScorePopTimer / 0.3;
+      scoreScale = 1.0 + 0.3 * Math.sin(popP * Math.PI);
+    }
+    const scoreFontSize = canvasWidth * 0.11 * scoreScale;
+    ctx.font = `bold ${scoreFontSize}px ${FONT.number}`;
+
+    let scoreColor = THEME.textPrimary;
+    if (resultCountScore >= CONFIG.star3Threshold) scoreColor = THEME.gold;
+    else if (resultCountScore >= CONFIG.star2Threshold) scoreColor = "#E8C840";
+    else if (resultCountScore >= CONFIG.star1Threshold) scoreColor = THEME.mint;
+
+    const scoreNumY = scY + scH * 0.58;
+    ctx.fillStyle = "rgba(74, 74, 74, 0.1)";
+    ctx.fillText(resultCountScore.toLocaleString(), cx + s(2), scoreNumY + s(3));
+    ctx.fillStyle = scoreColor;
+    ctx.fillText(resultCountScore.toLocaleString(), cx, scoreNumY);
+
+    // 숫자 광택
+    ctx.globalAlpha = scAlpha * (0.12 + 0.08 * Math.sin(now * 3));
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillText(resultCountScore.toLocaleString(), cx, scoreNumY - s(1));
+    ctx.globalAlpha = scAlpha;
+
+    // NEW RECORD (t=2.6초부터)
+    if ((t >= 2.6 || isDone) && resultIsNewRecord) {
+      const nrSinVal = Math.sin(now * (Math.PI * 2 / 1.2)); // B-4: 주기 1.2초
+      const nrAlpha = 0.7 + 0.3 * nrSinVal; // B-4: 0.7~1.0 범위
+      const nrScale = 1.0 + 0.05 * nrSinVal;
+      ctx.save();
+      ctx.globalAlpha = scAlpha * nrAlpha;
+      ctx.translate(cx, scY + scH * 0.85);
+      ctx.scale(nrScale, nrScale);
       ctx.fillStyle = THEME.gold;
-      ctx.font = `bold ${s(18)}px ${FONT.number}`;
-      ctx.fillText("NEW RECORD!", cx, nrY);
+      ctx.font = `${canvasWidth * 0.032}px ${FONT.text}`;
+      const nrW = ctx.measureText("NEW RECORD").width;
+      drawStar5(-nrW / 2 - s(12), 0, s(6), THEME.gold);
+      drawStar5(nrW / 2 + s(12), 0, s(6), THEME.gold);
+      ctx.fillText("NEW RECORD", 0, 0);
       ctx.restore();
     }
-  }
 
-  // 버튼 (슬라이드업 등장 + 알약형)
-  if (resultPhase === "done" && resultButtonTimer > 0) {
-    const btnW = s(130);
-    const btnH = s(44);
-    const gap = s(12);
-    const totalW = btnW * 2 + gap;
-    const startX = cx - totalW / 2;
-    const baseBtnY = canvasHeight * 0.78;
-
-    const slideProgress = clamp(resultButtonTimer / 0.3, 0, 1);
-    const slideEased = easeOutBack(slideProgress);
-    const slideOffset = (1 - slideEased) * s(40);
-    const btnY = baseBtnY + slideOffset;
-
-    ctx.globalAlpha = slideEased;
-    drawPillButton(startX, btnY, btnW, btnH, "다시하기", {
-      fillColor: THEME.mint, textColor: THEME.textLight, fontSize: s(16), fontFace: FONT.text
-    });
-    // 타이틀로 버튼: 반투명 배경 + 민트 테두리
-    ctx.save();
-    drawRoundedRect(startX + btnW + gap, btnY, btnW, btnH, btnH / 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.fill();
-    ctx.restore();
-    drawPillButton(startX + btnW + gap, btnY, btnW, btnH, "타이틀로", {
-      fillColor: THEME.mint, outline: true, fontSize: s(16), fontFace: FONT.text,
-      textColor: THEME.mintDark
-    });
     ctx.globalAlpha = 1;
   }
 
-  // 3성 화면 플래시
+  // D-5: 통계 카드 (t=2.8초부터)
+  const stElapsed = t - 2.8;
+  if (stElapsed > 0 || isDone) {
+    const stW = canvasWidth * 0.75;
+    const stH = canvasHeight * 0.22;
+    const stX = cx - stW / 2;
+    const baseStY = canvasHeight * 0.57;
+
+    const stProgress = isDone ? 1 : clamp(stElapsed / 0.4, 0, 1);
+    const slideEased = easeOutBack(stProgress);
+    const slideOffset = (1 - slideEased) * s(30);
+    const stY = baseStY + slideOffset;
+
+    ctx.globalAlpha = slideEased;
+
+    // 카드 패널
+    ctx.save();
+    if (is3Star) {
+      ctx.shadowColor = THEME.gold;
+      ctx.shadowBlur = s(8);
+    } else {
+      ctx.shadowColor = 'rgba(126, 206, 192, 0.15)';
+      ctx.shadowBlur = s(6);
+    }
+    ctx.shadowOffsetY = s(2);
+    drawRoundedRect(stX, stY, stW, stH, s(16));
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = is3Star ? THEME.gold : 'rgba(126, 206, 192, 0.2)';
+    ctx.lineWidth = is3Star ? s(2) : 1;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.globalAlpha = slideEased;
+
+    // 1행: HIT / MISS / PERFECT
+    const row1Y = stY + stH * 0.35;
+    const colWidth = stW / 3;
+    const statCols = [
+      { icon: 'circle', color: THEME.mintDark, label: 'HIT', value: gameStats.basicHits + gameStats.slideSuccess },
+      { icon: 'circle', color: THEME.coral, label: 'MISS', value: gameStats.trapHits + gameStats.emptyTaps },
+      { icon: 'star', color: THEME.gold, label: 'PERFECT', value: gameStats.timingE3 },
+    ];
+
+    for (let i = 0; i < 3; i++) {
+      const col = statCols[i];
+      const colCx = stX + colWidth * (i + 0.5);
+
+      // 팝인: t=2.9+i*0.1부터, 0.2초 duration
+      const popElapsed = isDone ? 1 : clamp((t - (2.9 + i * 0.1)) / 0.2, 0, 1);
+      if (popElapsed <= 0) continue;
+      const popScale = easeOutBack(popElapsed);
+
+      ctx.save();
+      ctx.translate(colCx, row1Y);
+      ctx.scale(popScale, popScale);
+
+      // 아이콘
+      if (col.icon === 'circle') {
+        ctx.fillStyle = col.color;
+        ctx.beginPath();
+        ctx.arc(0, -s(18), s(4), 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        drawStar5(0, -s(18), s(5), col.color);
+      }
+
+      // 라벨
+      ctx.fillStyle = col.color;
+      ctx.font = `${canvasWidth * 0.025}px ${FONT.text}`;
+      ctx.textAlign = "center";
+      ctx.fillText(col.label, 0, -s(6));
+
+      // 숫자
+      ctx.fillStyle = THEME.textPrimary;
+      ctx.font = `bold ${canvasWidth * 0.055}px ${FONT.number}`;
+      ctx.fillText(String(col.value), 0, s(12));
+
+      ctx.restore();
+    }
+
+    // 구분선
+    const sepY = stY + stH * 0.62;
+    ctx.strokeStyle = 'rgba(126, 206, 192, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(stX + s(20), sepY);
+    ctx.lineTo(stX + stW - s(20), sepY);
+    ctx.stroke();
+
+    // 2행: MAX COMBO
+    const row2Y = stY + stH * 0.8;
+    ctx.textAlign = "left";
+    ctx.fillStyle = THEME.mintDark;
+    ctx.font = `${canvasWidth * 0.028}px ${FONT.text}`;
+    ctx.fillText("MAX COMBO", stX + s(20), row2Y);
+
+    ctx.textAlign = "right";
+    let comboColor = THEME.textPrimary;
+    if (gameStats.maxCombo >= 30) comboColor = THEME.gold;
+    else if (gameStats.maxCombo >= 20) comboColor = THEME.coral;
+    ctx.fillStyle = comboColor;
+    ctx.font = `bold ${canvasWidth * 0.055}px ${FONT.number}`;
+    ctx.fillText(String(gameStats.maxCombo), stX + stW - s(20), row2Y);
+
+    ctx.textAlign = "center";
+    ctx.globalAlpha = 1;
+  }
+
+  // D-6: 버튼 (t=3.2초부터)
+  const btnElapsed = t - 3.2;
+  if (btnElapsed > 0 || isDone) {
+    const btnW = canvasWidth * 0.34;
+    const btnH = canvasHeight * 0.055;
+    const gap = s(8);
+    const baseBtnY = canvasHeight * 0.82;
+
+    const btnProgress = isDone ? 1 : clamp(btnElapsed / 0.3, 0, 1);
+    const slideEased = easeOutBack(btnProgress);
+    const slideOffset = (1 - slideEased) * s(20);
+    const btnY = baseBtnY + slideOffset;
+
+    ctx.globalAlpha = slideEased;
+
+    const btn1X = cx - gap - btnW;
+    drawPillButton(btn1X, btnY, btnW, btnH, "다시하기", {
+      fillColor: THEME.mint, textColor: THEME.textLight,
+      fontSize: canvasWidth * 0.04, fontFace: FONT.text
+    });
+
+    const btn2X = cx + gap;
+    ctx.save();
+    drawRoundedRect(btn2X, btnY, btnW, btnH, btnH / 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fill();
+    ctx.restore();
+    drawPillButton(btn2X, btnY, btnW, btnH, "타이틀로", {
+      fillColor: THEME.mint, outline: true,
+      fontSize: canvasWidth * 0.04, fontFace: FONT.text,
+      textColor: THEME.mintDark
+    });
+
+    ctx.globalAlpha = 1;
+  }
+
+  // D-6: "기록 보기 ▸" 텍스트 링크 (t=3.4초부터)
+  const linkElapsed = t - 3.4;
+  if (linkElapsed > 0 || isDone) {
+    const linkAlpha = isDone ? 0.6 : clamp(linkElapsed / 0.3, 0, 0.6);
+    const linkY = canvasHeight * 0.82 + canvasHeight * 0.055 + s(25);
+    ctx.globalAlpha = linkAlpha;
+    ctx.fillStyle = THEME.mintDark;
+    ctx.font = `${canvasWidth * 0.03}px ${FONT.text}`;
+    ctx.fillText("기록 보기 ▸", cx, linkY);
+    ctx.globalAlpha = 1;
+  }
+
+  // B-1: 별 등장 플래시 (약하게)
   if (result3StarFlash > 0) {
-    const flashAlpha = 0.3 * (result3StarFlash / 0.15);
-    ctx.fillStyle = `rgba(255, 215, 0, ${flashAlpha})`;
+    const flashAlpha = 0.06 * (result3StarFlash / 0.1);
+    ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
   }
 }
