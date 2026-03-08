@@ -4093,10 +4093,16 @@ function renderPinata() {
     ctx.font = `${canvasWidth * 0.045}px "${FONT.text}"`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.shadowColor = 'rgba(255,215,0,0.5)';
-    ctx.shadowBlur = 8;
+    const guideX = canvasWidth / 2;
+    const guideY = pinataY + pinataRadius + s(25);
+    // 외곽선 (가독성 확보)
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.strokeText('빠르게 터치하세요!', guideX, guideY);
+    // 메인 텍스트
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillText('빠르게 터치하세요!', canvasWidth / 2, pinataY + pinataRadius + s(25));
+    ctx.fillText('빠르게 터치하세요!', guideX, guideY);
     ctx.restore();
   }
 }
